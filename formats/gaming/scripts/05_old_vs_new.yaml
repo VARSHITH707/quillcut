@@ -1,0 +1,15 @@
+key: old_vs_new
+name: "5. Old vs New"
+pattern: comparison
+sources: [a, b]
+roles: {a: "the NEW version (shown first: stronger image leads)", b: "the OLD version, same angles"}
+duration: 30
+music: {bpm: [135, 145], drop_at: 14}
+text:
+  - {text: "2020 vs now", start: 2.0, end: 4.0}
+notes: "Script 5. Pass --text with the real years, e.g. \"2016 vs 2026\"."
+sections:
+  - {start: 0,  end: 4,  kind: side, source: a, anchor: from_peak}
+  - {start: 4,  end: 14, kind: side, source: a, anchor: continue, cuts: 3}
+  - {start: 14, end: 26, kind: side, source: b, anchor: from_peak, cuts: 4}
+  - {start: 26, end: 30, kind: split, top: a, bottom: b, anchor: continue, hold: 2}

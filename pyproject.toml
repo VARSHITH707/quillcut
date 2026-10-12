@@ -1,0 +1,34 @@
+[project]
+name = "quillcut"
+version = "0.1.0"
+description = "Quillcut Studio: local long-form to vertical short-form clipping engine"
+requires-python = ">=3.11"
+dependencies = [
+    "pyyaml",
+    "numpy",
+    "pydantic>=2",
+    "httpx",
+    "pillow",
+    "faster-whisper==1.2.1",
+    "scenedetect==0.7",
+    "opencv-python==5.0.0.93",
+    "mediapipe==0.10.14",
+]
+
+[project.optional-dependencies]
+# Torch is installed separately so you can pick the CUDA build for your GPU (see README).
+dev = ["pytest==9.1.1"]
+
+[project.scripts]
+quillcut = "quillcut.cli:main"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["slow: renders real video (minutes)"]

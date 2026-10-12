@@ -1,0 +1,16 @@
+key: underestimated
+name: "3. They underestimated him"
+pattern: status_inversion
+sources: [a]
+roles: {a: "a fight the player looks like losing, then wins; the peak is the flip"}
+duration: 30
+music: {quiet_until: 10, stop_at: 10, drop_at: 12}
+text:
+  - {text: "they thought he was done", start: 2.0, end: 4.0}
+notes: "Script 3. The near-silence at 10-12 s is the trick; audio is cut to 5% there, not filled."
+sections:
+  - {start: 0,  end: 4,  kind: side, source: a, anchor: before, gap: 12.0}
+  - {start: 4,  end: 10, kind: side, source: a, anchor: before, gap: 2.3, cuts: 3, spread: 1.4}
+  - {start: 10, end: 12, kind: side, source: a, anchor: before, gap: 0.3, audio_gain: 0.05}
+  - {start: 12, end: 26, kind: side, source: a, anchor: from_peak, lead: 0.0, cuts: 5, accelerate: true, spread: 1.5}
+  - {start: 26, end: 30, kind: side, source: a, anchor: continue, hold: 2}

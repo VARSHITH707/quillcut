@@ -1,0 +1,13 @@
+format:
+  key: gaming_podcast
+  name: "Gaming podcast"
+  status: delegated
+  description: "People talking about games, with or without gameplay on screen. Clips come from OpenShorts."
+
+duration:
+  hard_floor_seconds: 30
+  target_seconds: 45
+  max_seconds: 75
+
+delegate:
+  target_clips: 8

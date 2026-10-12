@@ -1,0 +1,25 @@
+format:
+  key: gaming
+  name: "Gaming"
+  status: native
+  description: "Gameplay, cinematics and streams, with or without commentary."
+
+language: auto
+
+mode:
+  commentary_min_speech_coverage: 0.25   # [INFERRED]
+
+duration:
+  hard_floor_seconds: 30                 # [DECISION] see FORMAT.md
+  target_seconds: 32
+  max_seconds: 90                       # user: 30 s to 1.5 min
+
+moments:
+  max_clips_per_project: 8
+
+editing:
+  caption_style: gaming_bold
+
+analysis:
+  video_fps: 4
+  peak_min_separation: 45

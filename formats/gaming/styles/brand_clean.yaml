@@ -1,0 +1,24 @@
+name: brand_clean
+case: natural
+fonts:
+  latin:      {family: "Arial Black", file: "C:/Windows/Fonts/ariblk.ttf", index: 0, bold: false}
+  devanagari: {family: "Nirmala UI",  file: "C:/Windows/Fonts/Nirmala.ttc", index: 0, bold: true}
+hook:                       # headline, upper third
+  y: 0.25
+  size: 84
+  min_size: 50
+  max_lines: 2
+watermark:                  # brand mark, always on screen, just under the top safe line
+  y: 0.165
+  size: 44
+  min_size: 36
+  max_lines: 1
+speech:
+  y: 0.70
+  size: 78
+  min_size: 56
+  max_lines: 2
+  words_per_card: 4
+colors: {base: "FFFFFF", active: "FFD400", stroke: "000000"}
+stroke_px: 6
+shadow_px: 3

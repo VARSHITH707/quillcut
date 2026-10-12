@@ -1,0 +1,15 @@
+key: hours_vs_hours
+name: "8. 10 hrs vs 500 hrs"
+pattern: comparison
+sources: [a, b]
+roles: {a: "EXPERT play (500 hrs, leads)", b: "BEGINNER play (10 hrs), same situation"}
+duration: 30
+music: {bpm: [140, 140], light_until: 16}
+text:
+  - {text: "10 hrs vs 500 hrs", start: 2.0, end: 4.0}
+notes: "Script 8. Same in-game situation for both halves so the comparison is honest."
+sections:
+  - {start: 0,  end: 4,  kind: side, source: a, anchor: from_peak}
+  - {start: 4,  end: 14, kind: side, source: b, anchor: around, cuts: 4}
+  - {start: 14, end: 28, kind: side, source: a, anchor: continue, cuts: 4}
+  - {start: 28, end: 30, kind: side, source: a, anchor: continue, hold: 1.5}

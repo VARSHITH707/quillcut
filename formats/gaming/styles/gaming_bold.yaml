@@ -1,0 +1,19 @@
+name: gaming_bold
+case: lower                 # STONE XD scripts: lowercase text
+fonts:
+  latin:      {family: "Arial Black", file: "C:/Windows/Fonts/ariblk.ttf", index: 0, bold: false}
+  devanagari: {family: "Nirmala UI",  file: "C:/Windows/Fonts/Nirmala.ttc", index: 0, bold: true}
+hook:                       # on-screen hook text, upper third
+  y: 0.24
+  size: 96
+  min_size: 60
+  max_lines: 2
+speech:                     # word captions in commentary mode
+  y: 0.70
+  size: 78
+  min_size: 56
+  max_lines: 2
+  words_per_card: 4
+colors: {base: "FFFFFF", active: "FFD400", stroke: "000000"}   # active word yellow (reference style)
+stroke_px: 6
+shadow_px: 3

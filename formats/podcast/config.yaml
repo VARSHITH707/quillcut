@@ -1,0 +1,13 @@
+format:
+  key: podcast
+  name: "Podcast / interview"
+  status: delegated
+  description: "Talking heads and conversations. Clips come from OpenShorts."
+
+duration:
+  hard_floor_seconds: 30
+  target_seconds: 50
+  max_seconds: 90
+
+delegate:
+  target_clips: 8

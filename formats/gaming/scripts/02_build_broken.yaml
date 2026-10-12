@@ -1,0 +1,19 @@
+key: build_broken
+name: "2. This build is broken"
+pattern: capability_display
+sources: [a]
+roles: {a: "the run with the biggest hit; the peak should be the hit"}
+duration: 30
+music: {bpm: [150, 150], drop_at: 14}
+text:
+  - {text: "this build shouldn't exist", start: 2.0, end: 4.0}
+notes: >-
+  Script 2. Opens on the hit, rewinds to the setup, accelerating run, 0.5x on the final hit.
+  The script's 28-30 s "cut to black" is played as aftermath footage instead: 2 s of black
+  would be padding, and the hard end still loops.
+sections:
+  - {start: 0,  end: 4,  kind: side, source: a, anchor: from_peak}
+  - {start: 4,  end: 14, kind: side, source: a, anchor: before, gap: 18.0, cuts: 4}
+  - {start: 14, end: 24, kind: side, source: a, anchor: before, gap: 2.9, cuts: 5, accelerate: true, spread: 1.5}
+  - {start: 24, end: 28, kind: slowmo, source: a}
+  - {start: 28, end: 30, kind: side, source: a, anchor: after, gap: 0.4}

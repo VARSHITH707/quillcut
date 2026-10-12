@@ -1,0 +1,16 @@
+key: emotional
+name: "6. Emotional beat"
+pattern: narrative_beat
+sources: [a]
+roles: {a: "cutscene; set --a-peak on the emotional peak frame"}
+duration: 30
+music: {bpm: [70, 90], style: "piano or strings, no percussion"}
+text:
+  - {text: null, start: 3.0, end: 5.0}     # one short lowercase line: pass --text
+fade_out: 1.0
+notes: "Script 6. Two cuts maximum in the middle; returns to the peak frame and fades to black."
+sections:
+  - {start: 0,  end: 5,  kind: side, source: a, anchor: from_peak, lead: 0.0}
+  - {start: 5,  end: 12, kind: side, source: a, anchor: before, gap: 0.3}
+  - {start: 12, end: 24, kind: side, source: a, anchor: continue, cuts: 2, spread: 1.2}
+  - {start: 24, end: 30, kind: side, source: a, anchor: from_peak, lead: 0.0, hold: 2}

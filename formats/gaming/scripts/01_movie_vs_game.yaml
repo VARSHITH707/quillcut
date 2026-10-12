@@ -1,0 +1,15 @@
+key: movie_vs_game
+name: "1. Movie vs Game"
+pattern: comparison
+sources: [a, b]
+roles: {a: "movie / trailer / cinematic version", b: "in-game version of the same subject"}
+duration: 30
+music: {bpm: [140, 150], drop_at: 14}
+text:
+  - {text: "movie vs game", start: 1.0, end: 3.0}
+notes: "Script 1. Split screen opens already in motion; hard cut to B at 12 s; split hold at the end."
+sections:
+  - {start: 0,  end: 3,  kind: split, top: a, bottom: b, anchor: from_peak}
+  - {start: 3,  end: 12, kind: side, source: a, anchor: continue, cuts: 3}
+  - {start: 12, end: 26, kind: side, source: b, anchor: continue, cuts: 4}
+  - {start: 26, end: 30, kind: split, top: a, bottom: b, anchor: continue, hold: 2}

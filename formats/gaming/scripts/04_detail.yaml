@@ -1,0 +1,14 @@
+key: detail
+name: "4. Nobody talks about this detail"
+pattern: craft_moment
+sources: [a]
+roles: {a: "the beautiful or clever moment; set --a-peak on the best frame"}
+duration: 30
+music: {bpm: [90, 110], drop_at: null}
+text:
+  - {text: "nobody talks about this detail", start: 3.0, end: 5.0}
+notes: "Script 4. Long shots (3-4 s), slow push-in on the opening frame, no fast cutting."
+sections:
+  - {start: 0,  end: 5,  kind: side, source: a, anchor: from_peak, lead: 0.0, push_in: 0.06}
+  - {start: 5,  end: 25, kind: side, source: a, anchor: continue, cuts: 6, spread: 1.3}
+  - {start: 25, end: 30, kind: side, source: a, anchor: continue}

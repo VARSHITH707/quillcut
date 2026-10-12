@@ -1,0 +1,5 @@
+# Verify limits at build time; they change. The single master uses default.yaml safe_area.
+platforms:
+  youtube_shorts:  {max_duration: 180, resolution: [1080, 1920], loudness_lufs: -14}
+  instagram_reels: {max_duration: 180, resolution: [1080, 1920], loudness_lufs: -14}   # was 90 s before 2025; verify
+  x:               {max_duration: 140, resolution: [1080, 1920], loudness_lufs: -14}   # non-premium accounts

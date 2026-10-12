@@ -1,0 +1,5 @@
+# Licensed music for the gaming format only. An empty pool is normal: clips use source audio.
+# Every entry needs licence, licence_url and platforms_allowed or it is refused (LicenceError, P1).
+# Note: Pixabay Music uses the Pixabay Content License, not CC0. Check each track's terms for
+# YouTube Shorts, Instagram Reels and X before adding it.
+tracks: []

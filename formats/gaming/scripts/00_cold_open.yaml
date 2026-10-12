@@ -1,0 +1,13 @@
+key: cold_open
+name: "Cold open (automatic)"
+pattern: capability_display
+sources: [a]
+roles: {a: "any gameplay video; the payoff is found automatically"}
+duration: 32
+speech_captions: auto       # word captions when the video has commentary
+text: []                    # no text hook until grounded hooks exist (P1)
+notes: "Opens on the payoff, rewinds to real setup, then plays through. Reaches 30 s with footage only."
+sections:
+  - {start: 0,  end: 2,  kind: side, source: a, anchor: from_peak}
+  - {start: 2,  end: 20, kind: side, source: a, anchor: before, gap: 0.3}
+  - {start: 20, end: 32, kind: side, source: a, anchor: from_peak}

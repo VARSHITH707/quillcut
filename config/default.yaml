@@ -1,0 +1,79 @@
+# Shared defaults. formats/<key>/config.yaml overrides any key here.
+
+duration:
+  hard_floor_seconds: 30        # [DECISION]
+  target_seconds: 32            # [DECISION]
+  max_seconds: 60               # [DECISION]
+
+source_quality:
+  min_content_short_side: 480   # FAIL below, after letterbox crop
+  warn_content_short_side: 720
+  max_upscale: 2.0              # [INFERRED]
+
+safe_area:                      # strictest union of Shorts / Reels / X, single master file
+  top: 0.14
+  bottom: 0.22
+  left: 0.06
+  right: 0.06
+  right_rail: {x_from: 0.84, y_from: 0.45}   # like/comment/share buttons [INFERRED]
+
+audio:
+  target_lufs: -14.0
+  true_peak_max: -1.0
+  loudness_tolerance: 1.5
+
+render:
+  final_encoder: x264
+  crf: 18
+  preset: slow
+  threads: 16
+  intermediate_crf: 12
+
+qc:
+  duration_tolerance: 0.15
+
+storage:
+  min_free_gb: 5
+  keep_analysis_media: false
+
+asr:
+  model: large-v3-turbo        # ~1.6 GB in data/cache/hf; better names and punctuation than small
+  device: cuda
+  compute_type: int8_float16
+
+analysis:
+  video_fps: 4
+  peak_min_separation: 45       # seconds between automatic clip peaks
+
+creative:                       # editorial evaluation + auto-repair (separate from technical qc)
+  pass_overall: 4.5             # [DECISION] user spec
+  gates: {hook: 4.0, pacing: 4.0, ending: 4.0}
+  max_repairs: 3                # automatic repair cycles per reel
+  act_min_confidence: 0.7       # below this a finding is reported but never auto-applied
+  count_min_confidence: 0.5     # below this a finding is advisory: reported, not scored
+  weights: {hook: 15, pacing: 15, story: 15, visual: 10, audio: 8, captions: 8, ending: 12,
+            cta: 5, rhythm: 4, loop: 3, fidelity: 5}
+  penalty: {critical: 3.0, major: 1.5, minor: 0.5, info: 0.0}
+  llm:
+    url: "http://localhost:11434"
+    text_model: "qwen2.5:7b-instruct-q4_K_M"
+    vision_models: ["qwen2.5vl:7b", "qwen2.5vl", "minicpm-v", "llava", "moondream"]
+    timeout_s: 240
+    vision_timeout_s: 900       # the vision model runs on the CPU on an 8 GB card (~3 min per reel)
+    model_confidence_cap: 0.8
+    frames: 6                   # frames shown to the vision model
+    vision_ctx: 3072            # the vision model has no flash attention: its compute graph grows with this, and at 6144
+                                # it needed 8 GiB, so it ran on the CPU. 3072 fits 6 frames + prompt on an 8 GB card
+    frame_size: [360, 640]      # image count x size sets Ollama's compute-graph memory; 6 at 540x960 needed 6.7 GiB,
+                                # which does not fit an 8 GB card, so the model silently ran on CPU
+  hook: {max_words: 12, speech_start_max_s: 1.5, min_opening_motion: 0.01, min_overlap: 0.4, major_overlap: 0.34}
+  ending: {tail_gap_ok_s: 0.25, dead_air_max_s: 2.0, extend_max_s: 8.0, trim_max_s: 12.0, abrupt_db: 10.0}
+  pacing: {pause_max_s: 1.2, pause_major_s: 2.0, pause_total_frac: 0.12, slow_wps: 1.3, slow_window_s: 8.0,
+           repeat_jaccard: 0.7, filler_max_s: 3.0}
+  rhythm: {static_minor_s: 6.0, static_major_s: 9.0}
+  captions: {min_card_s: 0.3, max_cps: 30, min_font: 52, min_coverage: 0.95, major_coverage: 0.85,
+             start_tol_s: 0.15, face_overlap: 0.2, y_options: [0.70, 0.64, 0.58]}
+  audio: {silence_db: -55.0, silence_max_s: 1.5, chop_db: 20.0, min_word_prob: 0.75, runs_spread_db: 12.0,
+          sync_tol_s: 0.1}
+  visual: {dark_luma: 28, blur_laplacian: 40.0, max_upscale_soft: 1.8, repeat_diff: 3.0}
+  cta: {min_seconds: 2.0, min_font: 40, max_words: 9, seconds: 2.5}

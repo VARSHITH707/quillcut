@@ -1,0 +1,14 @@
+# Copy this folder to formats/<key>/ to add a format, then edit this file.
+format:
+  key: CHANGE_ME
+  name: "New format"
+  status: delegated            # delegated (OpenShorts) or native (write code/pipeline.py + scripts/)
+  description: ""
+
+duration:
+  hard_floor_seconds: 30
+  target_seconds: 40
+  max_seconds: 75
+
+delegate:
+  target_clips: 8

@@ -1,0 +1,14 @@
+format:
+  key: longform
+  name: "Long-form video"
+  status: delegated
+  description: "Tutorials, essays, vlogs, tech. Clips come from OpenShorts with the screencast layout."
+
+duration:
+  hard_floor_seconds: 30
+  target_seconds: 42
+  max_seconds: 75
+
+delegate:
+  target_clips: 8
+  layouts: screencast

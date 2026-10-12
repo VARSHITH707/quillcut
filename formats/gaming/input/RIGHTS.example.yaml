@@ -1,0 +1,5 @@
+# Copy to RIGHTS.yaml in an input folder (one per client folder). Without a rights record,
+# clips render but never reach final/ or outputs/.
+status: own_footage        # own_footage | client_owned | client_licensed | cc_verified
+client: null               # client name when status is client_*
+agreement: null            # contract / message reference and date
