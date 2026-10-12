@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Quillcut Studio</title>
+  <meta name="description" content="Drop one long video and get captioned vertical reels with captions and hashtags, made on your own computer.">
+  <link rel="icon" href="/assets/favicon.png">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <a class="skip" href="#create">Skip to the app</a>
+
+  <header class="top">
+    <a class="brand" href="#top" aria-label="Quillcut Studio home">
+      <img src="/assets/mark.png" alt="" width="40" height="40">
+      <span class="brand__name">Quill<b>cut</b> <small>Studio</small></span>
+    </a>
+    <nav class="top__nav" aria-label="Page sections">
+      <a href="#create">Create</a>
+      <a href="#results">Reels</a>
+      <a href="#history">History</a>
+    </nav>
+    <div class="status" id="status" role="status" aria-live="polite">
+      <span class="dot" data-state="wait"></span><span id="status-text">Checking…</span>
+    </div>
+  </header>
+
+  <main id="top">
+    <section class="hero" aria-labelledby="title">
+      <span class="sticker" aria-hidden="true">Free · Local · Open source</span>
+      <h1 id="title">Drop one long video. Get <em>reels</em> ready to post.</h1>
+      <p class="lede">Captions, hashtags and clean vertical edits, made on your own computer. Nothing is uploaded anywhere.</p>
+    </section>
+
+    <section class="workspace" id="create" aria-label="Make reels">
+      <div class="steps">
+
+        <!-- 1 · video -->
+        <article class="card tab" aria-labelledby="s1">
+          <span class="tab__label" aria-hidden="true">1</span>
+          <h2 id="s1">Your video</h2>
+          <div class="drop" id="drop" tabindex="0" role="button" aria-describedby="drop-hint">
+            <input type="file" id="file" accept="video/*,.mkv" hidden>
+            <svg class="drop__icon" viewBox="0 0 48 48" aria-hidden="true"><path d="M24 33V11m0 0L14 21m10-10 10 10M8 37h32" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <p class="drop__title">Drag and drop your video here</p>
+            <p class="drop__hint" id="drop-hint">or press to choose a file · MP4, MOV, MKV, WEBM · at least 20 seconds, 720p or higher works best</p>
+            <button type="button" class="pill" id="pick">Upload video <span class="pill__arrow" aria-hidden="true">→</span></button>
+          </div>
+          <div class="file" id="file-chip" hidden>
+            <div class="file__meta">
+              <strong id="file-name"></strong>
+              <span id="file-info"></span>
+            </div>
+            <div class="bar" id="up-bar" hidden><i id="up-fill"></i></div>
+            <p class="warn" id="file-warn" hidden></p>
+            <div class="file__actions">
+              <button type="button" class="link" id="file-cancel" hidden>Cancel upload</button>
+              <button type="button" class="link" id="file-remove" hidden>Use a different video</button>
+            </div>
+          </div>
+          <p class="error" id="upload-error" role="alert" hidden></p>
+        </article>
+
+        <!-- 2 · look -->
+        <article class="card tab" aria-labelledby="s2">
+          <span class="tab__label" aria-hidden="true">2</span>
+          <h2 id="s2">Pick a look</h2>
+          <div class="formats" id="formats" role="radiogroup" aria-label="Short format"></div>
+          <div class="presets" id="presets" role="radiogroup" aria-label="Caption style"></div>
+        </article>
+
+        <!-- 3 · customise -->
+        <article class="card tab" aria-labelledby="s3">
+          <span class="tab__label" aria-hidden="true">3</span>
+          <h2 id="s3">Make it yours</h2>
+          <div class="field">
+            <label for="size">Caption size <output id="size-out">78</output></label>
+            <input type="range" id="size" min="48" max="120" step="2" value="78">
+          </div>
+          <div class="colors">
+            <label class="swatch"><input type="color" id="c-base" value="#ffffff"><span>Text</span></label>
+            <label class="swatch"><input type="color" id="c-active" value="#ffd400"><span>Highlight word</span></label>
+            <label class="swatch"><input type="color" id="c-stroke" value="#000000"><span>Outline</span></label>
+          </div>
+          <fieldset class="field">
+            <legend>How many reels?</legend>
+            <div class="seg" id="count"></div>
+          </fieldset>
+          <fieldset class="field">
+            <legend>Quality</legend>
+            <div class="seg" id="quality">
+              <label><input type="radio" name="quality" value="draft" checked><span>Draft · fast</span></label>
+              <label><input type="radio" name="quality" value="high"><span>High · slower</span></label>
+            </div>
+          </fieldset>
+        </article>
+
+        <!-- 4 · rights + go -->
+        <article class="card tab card--go" aria-labelledby="s4">
+          <span class="tab__label" aria-hidden="true">4</span>
+          <h2 id="s4">Confirm and make</h2>
+          <div class="field">
+            <label for="rights">Where did this video come from?</label>
+            <select id="rights"></select>
+          </div>
+          <label class="check">
+            <input type="checkbox" id="rights-ok">
+            <span>I own this video or have permission to turn it into reels.</span>
+          </label>
+          <button type="button" class="pill pill--big" id="go" disabled>Make my reels <span class="pill__arrow" aria-hidden="true">→</span></button>
+          <p class="hint" id="go-hint">Upload a video and tick the box to continue.</p>
+          <p class="error" id="job-error" role="alert" hidden></p>
+        </article>
+      </div>
+
+      <aside class="preview" aria-label="Caption preview">
+        <p class="preview__label">Live preview</p>
+        <div class="phone" id="phone">
+          <div class="phone__hook" id="pv-hook">the play nobody saw coming</div>
+          <div class="phone__speech" id="pv-speech"><span>this is how</span> <span class="on">it ends</span></div>
+        </div>
+        <p class="hint">Captions will look like this on your reels.</p>
+      </aside>
+    </section>
+
+    <!-- progress -->
+    <section class="progress card" id="progress" aria-live="polite" hidden>
+      <h2 id="progress-title">Making your reels…</h2>
+      <p id="progress-stage">Starting</p>
+      <div class="bar bar--big"><i id="job-fill"></i></div>
+      <p class="hint">This can take a few minutes for long videos. You can keep this page open.</p>
+    </section>
+
+    <!-- results -->
+    <section class="results" id="results" aria-labelledby="results-title">
+      <div class="results__head">
+        <h2 id="results-title">Your reels</h2>
+        <a class="pill pill--ghost" id="zip" href="#" hidden>Download all (.zip)</a>
+      </div>
+      <p class="empty" id="results-empty">Your finished reels will show up here, with a caption and hashtags for each one.</p>
+      <p class="note" id="results-note" hidden></p>
+      <div class="grid" id="grid"></div>
+    </section>
+
+    <section class="history" id="history" aria-labelledby="history-title">
+      <h2 id="history-title">Earlier runs</h2>
+      <p class="empty" id="history-empty">Nothing yet.</p>
+      <ul class="runs" id="runs"></ul>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <p>Quillcut Studio · runs on your computer · open source (MIT)</p>
+  </footer>
+
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+  <script src="/app.js"></script>
+</body>
+</html>

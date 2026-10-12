@@ -153,23 +153,51 @@ def render_and_export(plan: EditPlan, project: Project, cfg: dict, *, fast: bool
     return result
 
 
+def merge_style(style: dict, overrides: dict | None) -> dict:
+    """Return a copy of `style` with nested `overrides` applied (colors, sizes). Never mutates the input."""
+    merged = json.loads(json.dumps(style))
+    for key, value in (overrides or {}).items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = {**merged[key], **value}
+        else:
+            merged[key] = value
+    for part in ("hook", "speech", "watermark"):  # a smaller base size must not sit under the old floor
+        block = merged.get(part)
+        if isinstance(block, dict) and "min_size" in block and "size" in block:
+            block["min_size"] = min(block["min_size"], block["size"])
+    return merged
+
+
 def run_auto(video: Path, fmt_flag: str | None, rights: str | None, max_clips: int | None = None,
-             fast: bool = False) -> list[dict]:
+             fast: bool = False, *, caption_style: str | None = None, style_overrides: dict | None = None,
+             publish_dir: Path | None = None, on_progress=None) -> list[dict]:
+    """Automatic clips from one video.
+
+    caption_style / style_overrides / publish_dir / on_progress are optional hooks used by the web app;
+    on_progress(stage, done, total) is called as the run advances.
+    """
+    def progress(stage: str, done: int = 0, total: int = 0) -> None:
+        if on_progress:
+            on_progress(stage, done, total)
+
     fmt, how = resolve_format(video, fmt_flag)
     if fmt is None:
         raise SourceRejected("format unresolved: pass --format, use formats/<key>/input/, or a sidecar")
     cfg = load_config(fmt)
     pipeline = load_pipeline(fmt)
+    progress("waiting_for_gpu")
     with GpuLock():
         if pipeline.delegated:
             return run_delegated(video, fmt, how, rights, cfg)
+        progress("analysing")
         p = prepare(video, fmt, how, rights, cfg)
         tpl = load_templates(fmt)[pipeline.auto_template]
-        style = load_style(fmt, cfg["editing"]["caption_style"])
+        style = merge_style(load_style(fmt, caption_style or cfg["editing"]["caption_style"]), style_overrides)
         limit = max_clips or cfg["moments"]["max_clips_per_project"]
         results = []
         for n in range(limit):
             clip_id = f"c_{n + 1:02d}"
+            progress("rendering", n, limit)
             try:
                 ctx = source_ctx(p, "a", cfg, nth=n)
                 plan = build_plan(tpl, {"a": ctx}, cfg, style, clip_id=clip_id, project_id=p.project.id,
@@ -180,7 +208,8 @@ def run_auto(video: Path, fmt_flag: str | None, rights: str | None, max_clips: i
                 if "no peak" in str(exc):
                     break
                 continue
-            results.append(render_and_export(plan, p.project, cfg, fast=fast))
+            results.append(render_and_export(plan, p.project, cfg, fast=fast, publish_dir=publish_dir))
+        progress("finished", len(results), limit)
         return results
 
 

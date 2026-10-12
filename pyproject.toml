@@ -29,6 +29,9 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+quillcut = ["web/static/*", "web/static/assets/*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = ["slow: renders real video (minutes)"]

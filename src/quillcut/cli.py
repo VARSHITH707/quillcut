@@ -201,6 +201,12 @@ def cmd_batch(args) -> int:
     return code
 
 
+def cmd_web(args) -> int:
+    from .web.server import serve
+    serve(args.port, open_browser=not args.no_browser)
+    return 0
+
+
 def main(argv=None) -> int:
     apply_cache_env()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
@@ -262,6 +268,11 @@ def main(argv=None) -> int:
     b.add_argument("folder")
     b.add_argument("--fast", action="store_true")
     b.set_defaults(fn=cmd_batch)
+
+    w = sub.add_parser("web", help="open the drag-and-drop app in your browser (this computer only)")
+    w.add_argument("--port", type=int, default=8765)
+    w.add_argument("--no-browser", action="store_true", help="don't open a browser tab")
+    w.set_defaults(fn=cmd_web)
 
     args = ap.parse_args(argv)
     return args.fn(args)
