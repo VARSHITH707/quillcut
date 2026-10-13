@@ -67,6 +67,13 @@ def test_status_lists_presets_formats_and_rights(app):
     assert any(f["key"] == "gaming" and f["available"] for f in body["formats"])
 
 
+def test_busy_port_gives_a_plain_message(app):
+    port, _ = app
+    with pytest.raises(SystemExit) as exc:
+        server.serve(port, open_browser=False)
+    assert "not available" in str(exc.value) and f"--port {port + 1}" in str(exc.value)
+
+
 def test_index_page_and_security_headers(app):
     port, _ = app
     status, headers, data = call(port, "GET", "/")

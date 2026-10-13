@@ -29,9 +29,20 @@ caption fonts are Windows-specific.
 You need Python 3.11, [ffmpeg](https://ffmpeg.org) on your PATH, and optionally an NVIDIA GPU and
 [Ollama](https://ollama.com) for AI-written captions.
 
+### Easiest: double-click `launch.bat`
+
 ```powershell
 git clone https://github.com/VARSHITH707/quillcut.git
 cd quillcut
+.\launch.bat
+```
+
+The first run sets everything up (a few GB, several minutes) and opens the app. After that it
+starts in seconds. Keep the window open while you use the app, and close it to stop.
+
+### Manual setup
+
+```powershell
 python -m venv .venv
 .venv\Scripts\Activate.ps1
 ```

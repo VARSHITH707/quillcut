@@ -529,15 +529,27 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
 
+class LocalServer(ThreadingHTTPServer):
+    # On Windows SO_REUSEADDR lets a second process bind a port that is already in use, so two copies of
+    # the app would both "start". Turn it off: a busy port must fail loudly.
+    allow_reuse_address = False
+    daemon_threads = True
+
+
 def make_server(port: int = 8765) -> ThreadingHTTPServer:
     UPLOADS.mkdir(parents=True, exist_ok=True)
     JOBS.mkdir(parents=True, exist_ok=True)
+    httpd = LocalServer(("127.0.0.1", port), Handler)  # bind first so a busy port fails before any thread starts
     threading.Thread(target=worker, daemon=True, name="quillcut-worker").start()
-    return ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    return httpd
 
 
 def serve(port: int = 8765, open_browser: bool = True) -> None:
-    server = make_server(port)
+    try:
+        server = make_server(port)
+    except OSError as exc:
+        raise SystemExit(f"Port {port} is not available ({exc.strerror}). Quillcut may already be running: "
+                         f"open http://127.0.0.1:{port}/ or start with --port {port + 1}.") from None
     url = f"http://127.0.0.1:{port}/"
     print(f"Quillcut is running at {url}  (press Ctrl+C to stop)")
     if open_browser:
