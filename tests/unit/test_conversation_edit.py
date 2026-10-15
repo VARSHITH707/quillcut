@@ -134,7 +134,87 @@ def test_pauses_are_tightened_but_words_are_never_cut():
     shots = reelplan.trim_pauses(words, 0.0, 3.2)
     assert len(shots) == 2
     assert shots[0][1] >= 0.7 and shots[1][0] <= 2.7          # both edges stay outside every word
-    assert shots[1][0] - shots[0][1] == pytest.approx(2.0 - reelplan.PAUSE_KEEP, abs=0.01)
+    # what is left of the 2.0 s silence is the 0.15-0.20 s the spec asks for
+    left = 2.0 - (shots[1][0] - shots[0][1])
+    assert 0.15 <= left <= 0.20
+
+
+def test_a_pause_over_040_seconds_is_tightened_and_shorter_ones_are_kept():
+    words = [{"word": "a", "start": 0.0, "end": 0.3}, {"word": "b", "start": 0.55, "end": 0.8},   # 0.25 s: kept
+             {"word": "c", "start": 1.4, "end": 1.7}]                                              # 0.60 s: tightened
+    shots = reelplan.trim_pauses(words, 0.0, 1.9)
+    assert len(shots) == 2
+    assert shots[0][1] == pytest.approx(0.8 + reelplan.PAUSE_KEEP / 2, abs=0.01)
+
+
+def test_filler_sounds_are_removed_but_real_words_never_are():
+    words = [{"word": "So", "start": 0.0, "end": 0.2}, {"word": "um", "start": 0.3, "end": 0.55},
+             {"word": "the", "start": 0.62, "end": 0.8}, {"word": "like", "start": 0.85, "end": 1.0},
+             {"word": "plan", "start": 1.05, "end": 1.4}]
+    shots = reelplan.trim_pauses(words, 0.0, 1.5)
+    kept = [w["word"] for w in words if any(a - 1e-6 <= w["start"] and w["end"] <= b + 1e-6 for a, b in shots)]
+    assert "um" not in kept
+    assert kept == ["So", "the", "like", "plan"]                # "like" is a word; only sounds are cut
+
+
+def test_cuts_follow_the_intensity_and_fall_between_words():
+    words, t = [], 0.0
+    for i in range(80):
+        words.append({"word": f"w{i}", "start": round(t, 3), "end": round(t + 0.30, 3)})
+        t += 0.36
+    for name, (lo, hi) in {k: v["cut"] for k, v in reelplan.INTENSITY.items()}.items():
+        pieces = reelplan.split_by_velocity((0.0, t), words, (lo, hi))
+        lengths = [b - a for a, b in pieces]
+        assert all(a2 == pytest.approx(b1) for (_, b1), (a2, _) in zip(pieces, pieces[1:]))   # contiguous
+        assert max(lengths[:-1]) <= hi + 0.45, name                 # word-boundary snapping can add a word
+        assert min(lengths[:-1]) >= 0.6 * lo - 0.01, name
+        for _, cut in pieces[:-1]:                                  # a cut never lands inside a word
+            assert not any(w["start"] + 1e-6 < cut < w["end"] - 1e-6 for w in words)
+    clean = len(reelplan.split_by_velocity((0.0, t), words, reelplan.INTENSITY["clean"]["cut"]))
+    high = len(reelplan.split_by_velocity((0.0, t), words, reelplan.INTENSITY["high_energy"]["cut"]))
+    assert high > clean
+
+
+def test_hook_is_shown_in_frames_of_at_most_five_words():
+    assert reelplan.hook_frames("Stop doing this today") == ["Stop doing this today"]
+    two = reelplan.hook_frames("Honestly, the biggest mistake I made early on was working all day")
+    assert len(two) == 2 and all(len(f.rstrip("…").split()) <= 5 for f in two)
+    long = reelplan.hook_frames("one two three four five six seven eight nine ten eleven twelve thirteen")
+    assert len(long) == 2 and long[-1].endswith("…")
+    words = " ".join(long).replace("…", "").split()
+    assert words == "one two three four five six seven eight nine ten".split()      # a verbatim prefix
+
+
+def test_hook_archetypes_label_the_line_without_changing_it():
+    assert cv.classify_archetype("Stop wasting your mornings on email.") == "loss_avoidance"
+    assert cv.classify_archetype("Nobody tells you the truth about hiring.") == "information_asymmetry"
+    assert cv.classify_archetype("Everything you know about sleep is actually a myth.") == "contrarian"
+    assert cv.classify_archetype("How top performers build a system and master habits.") == "status_optimization"
+    assert cv.classify_archetype("We went to the shop on Tuesday.") is None
+
+
+def test_captions_sit_in_the_centre_third_with_three_to_five_words(cfg, style):
+    built, *_ = plan_for(cfg, style, intensity="dynamic")
+    speech = [c for c in built.plan.text_cards if c.kind == "speech"]
+    assert speech
+    for c in speech:
+        mid = (c.bbox_norm[1] + c.bbox_norm[3]) / 2
+        assert reelplan.CAPTION_BAND[0] - 0.02 <= mid <= reelplan.CAPTION_BAND[1] + 0.02, c.text
+        assert 1 <= len(c.text.split()) <= reelplan.CAPTION_MAX_WORDS, c.text
+    hooks = [c for c in built.plan.text_cards if c.kind == "hook"]
+    assert hooks and all(len(h.text.rstrip("…").split()) <= reelplan.HOOK_FRAME_WORDS for h in hooks)
+    assert hooks[0].start <= 0.2 and hooks[-1].end <= 3.05                  # the hook lives in the first 3 s
+
+
+def test_caption_position_is_clamped_into_the_centre_third(cfg, style):
+    words, end = talk(interview("What do you do for a living?", ML, 40.0))
+    out = cv.analyse(words, end + 3, targets=[45.0])
+    c = out["selections"][0].candidate
+    for asked, expected in ((0.9, 0.65), (0.1, 0.35), (0.5, 0.5)):
+        built = reelplan.build(c, out["sentences"], ref(dur=end + 3), cfg, style, clip_id="r", project_id="p",
+                               rights={"status": "own_footage"},
+                               options=reelplan.PlanOptions(intensity="clean", caption_y=asked))
+        assert built.plan.caption_style["speech"]["y"] == pytest.approx(expected)
 
 
 def test_plan_keeps_every_word_of_the_answer_in_order(cfg, style):
@@ -176,9 +256,10 @@ def test_intensity_changes_the_edit_not_just_the_captions(cfg, style):
     clean, *_ = plan_for(cfg, style, intensity="clean")
     dyn, *_ = plan_for(cfg, style, intensity="dynamic")
     high, *_ = plan_for(cfg, style, intensity="high_energy")
-    assert max(s.zoom for s in clean.plan.segments) == 1.0
-    assert max(s.zoom for s in dyn.plan.segments) > 1.0
-    assert len(high.plan.segments) >= len(dyn.plan.segments) > len(clean.plan.segments)
+    assert max(s.zoom for s in clean.plan.segments) <= 1.05
+    assert max(s.zoom for s in dyn.plan.segments) >= 1.10
+    assert max(s.zoom for s in high.plan.segments) >= 1.18
+    assert len(high.plan.segments) > len(dyn.plan.segments) > len(clean.plan.segments)
     assert high.plan.progress_bar and not clean.plan.progress_bar
     kinds = lambda b: {c.kind for c in b.plan.text_cards}                     # noqa: E731
     assert "lower_third" not in kinds(clean)

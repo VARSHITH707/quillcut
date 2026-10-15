@@ -44,8 +44,8 @@ class Segment(BaseModel):
 
     @model_validator(mode="after")
     def _check(self):
-        if self.src_out - self.src_in < 0.2:
-            raise ValueError(f"{self.id}: segment shorter than 0.2 s")
+        if self.src_out - self.src_in < 0.1:
+            raise ValueError(f"{self.id}: segment shorter than 0.1 s")
         if not 0.5 <= self.speed <= 2.0:
             raise ValueError(f"{self.id}: speed {self.speed} outside 0.5–2.0")
         if self.layout == "split" and (self.second_source is None or self.second_in is None):

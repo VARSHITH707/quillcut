@@ -2,7 +2,7 @@
 (() => {
   "use strict";
   const $ = (id) => document.getElementById(id);
-  const STORE_KEY = "quillcut.options.v2";
+  const STORE_KEY = "quillcut.options.v3";
   const COUNTS = [1, 2, 3, 5, 10];
   const DEFAULT_TARGET = 45;
 
@@ -66,7 +66,7 @@
       preset: selected("preset"),
       colors: { base: hex("c-base"), active: hex("c-active"), stroke: hex("c-stroke") },
       caption_size: Number($("size").value),
-      caption_y: Number($("caption-y").value) / 100,
+      caption_y: clamp(Number($("caption-y").value), 35, 65) / 100,
       accent: hex("c-accent"),
       intensity: selected("intensity") || "dynamic",
       aspect: selected("aspect") || "9:16",
@@ -83,9 +83,9 @@
   }
 
   const INTENSITY_HINTS = {
-    clean: "Captions and a title only. No zooms.",
-    dynamic: "Adds framing changes, a title, key-term emphasis and a key-phrase callout.",
-    high_energy: "Faster framing changes, bigger punch-ins, callouts and a progress bar.",
+    clean: "Framing change every 3-4 s with a gentle 1.05x zoom. Title and captions only.",
+    dynamic: "Framing change every 2-2.5 s (1.0x, 1.10x, 1.14x), key-term emphasis and a key-phrase callout.",
+    high_energy: "Framing change every 1.2-1.8 s (1.0x, 1.12x, 1.18x), two callouts and a progress bar.",
   };
 
   function paintPreview() {
@@ -217,7 +217,7 @@
     }
     if (saved.accent) set("c-accent", "#" + saved.accent);
     set("size", saved.caption_size);
-    if (saved.caption_y) set("caption-y", Math.round(saved.caption_y * 100));
+    if (saved.caption_y) set("caption-y", clamp(Math.round(saved.caption_y * 100), 35, 65));
     set("content-style", saved.content_style);
     set("include-question", saved.include_question);
     ["intensity", "aspect", "quality", "music"].forEach((name) => {
@@ -468,6 +468,7 @@
   }
 
   const HOOK_LABEL = { cold_open: "Opens on the strongest line", question: "Opens on the question", opening: "Opens on the first line" };
+  const ARCHETYPE = { loss_avoidance: "Loss avoidance", information_asymmetry: "Insider information", status_optimization: "Status and optimisation", contrarian: "Contrarian" };
 
   function checksList(items) {
     return el("ul", { className: "checks" }, items.map((v) =>
@@ -483,7 +484,7 @@
           el("span", { className: "badge badge--bad", textContent: clip.rejected ? "Not made" : "Didn't pass checks" })),
         el("p", { className: "hint", textContent: why }));
     }
-    const caption = el("textarea", { id: `cap-${clip.clip_id}`, value: clip.caption || "", rows: 3 });
+    const caption = el("textarea", { id: `cap-${clip.clip_id}`, value: clip.caption || "", rows: 8 });
     const tags = clip.hashtags || [];
     const source = clip.source === "ollama" ? "Written by your local AI model" : "Template caption · start Ollama for AI-written captions";
     const review = clip.needs_review;
@@ -503,7 +504,7 @@
       durations,
       clip.note ? el("p", { className: "reel__note", textContent: clip.note }) : "",
       el("p", { className: "reel__hook" },
-        el("small", { textContent: HOOK_LABEL[(clip.hook || {}).kind] || "Hook" }), " ",
+        el("small", { textContent: (HOOK_LABEL[(clip.hook || {}).kind] || "Hook") + ((clip.hook || {}).archetype ? " · " + ARCHETYPE[clip.hook.archetype] : "") }), " ",
         el("q", { textContent: (clip.hook || {}).text || "" })),
       el("label", { htmlFor: caption.id, textContent: "Caption" }),
       caption,
@@ -657,3 +658,4 @@
 
   boot();
 })();
+

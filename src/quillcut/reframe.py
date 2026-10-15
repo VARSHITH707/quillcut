@@ -73,17 +73,39 @@ def pick_active_center(frames: np.ndarray, detections: list[list[tuple[float, fl
     return float(np.mean([(b[0] + b[2]) / 2 for _, b in best]))
 
 
+WINDOW_SECONDS = 4.0     # shots this close together share one face analysis
+
+
+def windows(shots: list[tuple[float, float]], span: float = WINDOW_SECONDS) -> list[list[int]]:
+    """Group shot indices into runs of contiguous shots covering at most `span` seconds."""
+    groups: list[list[int]] = []
+    for i, (a, b) in enumerate(shots):
+        if groups:
+            first = shots[groups[-1][0]]
+            last = shots[groups[-1][-1]]
+            if abs(a - last[1]) < 0.6 and b - first[0] <= span:
+                groups[-1].append(i)
+                continue
+        groups.append([i])
+    return groups
+
+
 def crop_centers(video: Path, shots: list[tuple[float, float]], content_box: tuple[int, int, int, int],
                  detector=detect_faces) -> list[float | None]:
-    """One normalised crop centre per shot (None = centre it). Smooths away single-frame misses."""
-    out: list[float | None] = []
-    for start, end in shots:
+    """One normalised crop centre per shot (None = centre it).
+
+    Face analysis runs once per ~4 s window of contiguous shots, then each shot takes its window's speaker,
+    so a reel cut every second or two does not pay for a detector per cut."""
+    out: list[float | None] = [None] * len(shots)
+    for group in windows(shots):
+        start, end = shots[group[0]][0], shots[group[-1]][1]
         frames, _ = sample_frames(video, start, end, content_box)
         if len(frames) == 0:
-            out.append(None)
             continue
         dets = detector(list(frames))
-        out.append(pick_active_center(frames, dets) if dets is not None else None)
+        center = pick_active_center(frames, dets) if dets is not None else None
+        for i in group:
+            out[i] = center
     return out
 
 

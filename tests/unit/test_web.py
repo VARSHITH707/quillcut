@@ -344,7 +344,7 @@ def test_analyze_job_reports_what_the_video_supports(app, monkeypatch):
     ({"aspect": "4:3"}, "Aspect"),
     ({"include_question": "maybe"}, "Question setting"),
     ({"accent": "orange"}, "hex color"),
-    ({"caption_y": 0.2}, "safe area"),
+    ({"caption_y": 0.2}, "centre third"),
     ({"music": "loud"}, "Music"),
     ({"prefer": [5, 2]}, "Preferred range"),
 ])
@@ -398,3 +398,54 @@ def test_logo_upload_accepts_images_only(app):
     assert status == 201 and as_json(data)["kind"] == "logo"
     assert call(port, "POST", "/api/upload?kind=logo&name=brand.exe", b"MZ" * 50)[0] == 415
     assert call(port, "POST", "/api/upload?kind=logo&name=fake.png", b"not an image at all" * 20)[0] == 422
+
+
+
+# --- social post: re-hook, bullets, call to action ------------------------------------------------------------
+
+TRANSCRIPT = ("My name is Alex. I am a software engineer. I started learning programming three years ago. "
+              "Initially I struggled with Python and almost quit twice. Then I built my first machine learning "
+              "project which changed how I approached technology. Today I work on applications that solve real "
+              "problems for small businesses.")
+
+
+def test_social_post_has_a_short_rehook_bullets_and_a_cta(monkeypatch):
+    monkeypatch.setattr(copywriter, "_ask_post", lambda *a, **k: None)
+    post = copywriter.social_post("What do you do?", "Learning to code", TRANSCRIPT, content_style="educational",
+                                  url="http://x", model="m")
+    assert post["source"] == "template"
+    assert len(post["rehook"].split()) < 10
+    assert 3 <= len(post["bullets"]) <= 4
+    assert all(len(b.split()) <= 19 for b in post["bullets"])
+    assert post["caption"].startswith(post["rehook"]) and post["caption"].rstrip().endswith("Save this guide for later.")
+    assert post["caption"].count("\u2022") == len(post["bullets"])
+    # every bullet is the speaker's own sentence (possibly shortened), never new wording
+    plain = TRANSCRIPT.replace(".", "").lower()
+    assert all(b.rstrip("\u2026").replace(".", "").lower() in plain for b in post["bullets"])
+
+
+@pytest.mark.parametrize("style,cta", [("educational", "Save this guide for later."),
+                                      ("debate", "Comment your thoughts below."),
+                                      ("business", "Send this to a teammate.")])
+def test_call_to_action_follows_the_clip_type(style, cta):
+    assert copywriter.cta_for(copywriter.clip_type(style, "")) == cta
+
+
+def test_clip_type_is_read_from_the_words_when_no_style_is_chosen():
+    biz = "Our customers drove revenue growth because the startup pricing and sales strategy worked for clients."
+    opinion = "Honestly I think this is wrong, and I believe you should disagree, because it is a myth."
+    assert copywriter.clip_type(None, biz) == "business"
+    assert copywriter.clip_type(None, opinion) == "opinion"
+    assert copywriter.clip_type("auto", "We baked bread.") == "educational"
+
+
+def test_model_bullets_are_refused_when_they_are_not_from_the_transcript():
+    assert not copywriter._grounded("Sharks migrate across the arctic every winter season", TRANSCRIPT)
+    assert not copywriter._grounded("Quantum computers solve everything instantly for investors", TRANSCRIPT)
+    assert copywriter._grounded("I built my first machine learning project", TRANSCRIPT)
+
+
+def test_unusable_model_post_falls_back_to_the_template(monkeypatch):
+    monkeypatch.setattr(copywriter, "_ask_post", lambda *a, **k: None)
+    post = copywriter.social_post(None, None, TRANSCRIPT, content_style=None, url="http://x", model="m")
+    assert post["source"] == "template" and post["bullets"] and post["hashtags"]

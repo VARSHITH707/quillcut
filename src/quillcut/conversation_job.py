@@ -109,6 +109,26 @@ def verify_render(video: Path, plan, cfg: dict, expected_words: list[str]) -> li
     add("hook_in_first_seconds", bool(hook) and hook[0].start < 1.0, f"hook {hook[0].text!r}" if hook else "no hook card")
     speech_end = max((w.end for c in plan.text_cards if c.kind == "speech" for w in c.words), default=0.0)
     add("captions_inside_clip", speech_end <= plan.duration + 0.05, f"last caption ends {speech_end:.2f}s")
+
+    speech = [c for c in plan.text_cards if c.kind == "speech"]
+    too_long = [c.text for c in speech if len(c.text.split()) > reelplan.CAPTION_MAX_WORDS]
+    add("caption_word_limit", not too_long,
+        f"{len(speech)} caption cards, none over {reelplan.CAPTION_MAX_WORDS} words" if not too_long
+        else f"over {reelplan.CAPTION_MAX_WORDS} words: {too_long[:2]}")
+    lo, hi = reelplan.CAPTION_BAND
+    off = [c.text for c in speech if not lo - 0.02 <= (c.bbox_norm[1] + c.bbox_norm[3]) / 2 <= hi + 0.02]
+    add("captions_in_centre_third", not off, "all caption cards centred between 35% and 65% of the height"
+        if not off else f"outside the centre third: {off[:2]}")
+    hook_long = [c.text for c in hook if len(c.text.rstrip("…").split()) > reelplan.HOOK_FRAME_WORDS]
+    add("hook_word_limit", not hook_long, f"{len(hook)} hook frame(s), each at most {reelplan.HOOK_FRAME_WORDS} words"
+        if not hook_long else f"too many words: {hook_long}")
+    safe = cfg["safe_area"] if plan.output.width < plan.output.height else \
+        {"top": 0.06, "bottom": 0.10, "left": 0.06, "right": 0.06}
+    outside = [c.text for c in plan.text_cards
+               if not (c.bbox_norm[0] >= safe["left"] - 1e-3 and c.bbox_norm[2] <= 1 - safe["right"] + 1e-3
+                       and c.bbox_norm[1] >= safe["top"] - 1e-3 and c.bbox_norm[3] <= 1 - safe["bottom"] + 1e-3)]
+    add("overlays_inside_safe_area", not outside, f"{len(plan.text_cards)} overlays inside the safe area"
+        if not outside else f"outside the safe area: {outside[:3]}")
     try:
         from .models.asr import FasterWhisperASR
         a = cfg["asr"]
@@ -214,7 +234,8 @@ def run(video: Path, *, rights: str | None, targets: list[float], fmt: str = "ga
                 "note": duration_note(sel.target, actual, built.hook["kind"] == "cold_open"),
                 "source_start": round(c.start, 2), "source_end": round(c.end, 2),
                 "question_included": c.question_included, "partial": c.partial,
-                "hook": {"kind": built.hook["kind"], "text": built.hook["text"]},
+                "hook": {"kind": built.hook["kind"], "text": built.hook["text"],
+                         "archetype": built.hook.get("archetype"), "frames": built.hook.get("frames", [])},
                 "topic": c.topic or "", "scores": c.scores, "score": c.score, "reasons": c.reasons,
                 "intensity": options.intensity, "aspect": options.aspect, "notes": built.notes,
                 "qc": res["qc"], "failures": res["failures"], "warnings": res["warnings"],

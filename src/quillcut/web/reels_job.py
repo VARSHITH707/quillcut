@@ -82,8 +82,8 @@ def validate(body: dict) -> dict:
             caption_y = float(caption_y)
         except (TypeError, ValueError):
             raise OptionError("Caption position must be a number.") from None
-        if not 0.45 <= caption_y <= 0.78:
-            raise OptionError("Caption position must stay inside the safe area (0.45 to 0.78).")
+        if not 0.35 <= caption_y <= 0.65:
+            raise OptionError("Caption position must stay in the centre third of the frame (0.35 to 0.65).")
     music = body.get("music", "none")
     if music not in ("none", "subtle"):
         raise OptionError("Music must be none or subtle.")
@@ -108,12 +108,10 @@ def run_reels(job: dict, update, publish_dir: Path, logo_path: Path | None) -> N
     cfg = load_config("gaming")
     overrides = {"colors": opts["colors"], "speech": {"size": opts["caption_size"]},
                  "hook": {"size": opts["hook_size"]}}
-    if opts.get("caption_y"):
-        overrides["speech"]["y"] = opts["caption_y"]
     tracks = music_tracks() if opts["music"] == "subtle" else []
     plan_opts = reelplan.PlanOptions(
         intensity=opts["intensity"], aspect=opts["aspect"], reframe=opts["reframe"], cta=opts["cta"],
-        accent=opts["accent"], logo=str(logo_path) if logo_path else None,
+        accent=opts["accent"], logo=str(logo_path) if logo_path else None, caption_y=opts.get("caption_y"),
         music={"file": tracks[0]["file"], "licence": tracks[0]["licence"], "level_db": -16.0} if tracks
         else ({"file": ""} if opts["music"] == "subtle" else None))
 
@@ -140,9 +138,11 @@ def run_reels(job: dict, update, publish_dir: Path, logo_path: Path | None) -> N
             entry["file"] = Path(r["published"]).name
             text = _spoken_text(Path(r["final"]).parent.parent, r["source_start"], r["source_end"])
             entry["transcript"] = text[:600]
-            entry.update(copywriter.describe(r["hook"]["text"], r.get("topic") or None, text,
-                                             url=llm.get("url", "http://localhost:11434"),
-                                             model=llm.get("text_model", "qwen2.5:7b-instruct-q4_K_M")))
+            entry.update(copywriter.social_post(
+                r["hook"]["text"], r.get("topic") or None, text,
+                content_style=None if opts["content_style"] == "auto" else opts["content_style"],
+                url=llm.get("url", "http://localhost:11434"),
+                model=llm.get("text_model", "qwen2.5:7b-instruct-q4_K_M")))
         clips.append(entry)
         notes += r.get("notes", [])
     good = [c for c in clips if c.get("file")]

@@ -74,6 +74,120 @@ def _ask_ollama(url: str, model: str, hook: str | None, topic: str | None, trans
     return {"caption": caption[:MAX_CAPTION].rstrip(), "hashtags": clean_tags(tags, BASE_TAGS[:1]), "source": "ollama"}
 
 
+# --------------------------------------------------------------------------------------------- social post
+
+CTA_SAVE = "Save this guide for later."
+CTA_COMMENT = "Comment your thoughts below."
+CTA_SEND = "Send this to a teammate."
+BUSINESS_WORDS = {"revenue", "customers", "customer", "clients", "client", "startup", "market", "pricing", "sales",
+                  "founder", "founders", "company", "business", "profit", "investors", "team", "hiring", "brand",
+                  "growth", "industry", "strategy", "product"}
+OPINION_WORDS = {"think", "believe", "opinion", "should", "wrong", "disagree", "honestly", "overrated", "myth",
+                 "unpopular", "controversial", "actually", "debate"}
+REHOOK_WORDS = 9          # "< 10 words"
+BULLET_WORDS = 18         # keeps each bullet to two short lines
+
+
+def clip_type(content_style: str | None, transcript: str) -> str:
+    """educational | opinion | business, from the chosen content style or, failing that, the words used."""
+    mapped = {"educational": "educational", "debate": "opinion", "motivational": "opinion",
+              "storytelling": "opinion", "business": "business"}
+    if content_style in mapped:
+        return mapped[content_style]
+    words = [w.strip(".,!?;:\"'").lower() for w in transcript.split()]
+    biz = sum(w in BUSINESS_WORDS for w in words)
+    opinion = sum(w in OPINION_WORDS for w in words)
+    if biz >= 3 and biz >= opinion:
+        return "business"
+    if opinion >= 3:
+        return "opinion"
+    return "educational"
+
+
+def cta_for(kind: str) -> str:
+    return {"educational": CTA_SAVE, "opinion": CTA_COMMENT, "business": CTA_SEND}[kind]
+
+
+def _shorten(text: str, limit: int) -> str:
+    words = text.split()
+    if len(words) <= limit:
+        return text.strip()
+    cut = limit
+    for k in range(limit, max(5, limit // 2), -1):        # end on a clause boundary when there is one
+        if re.search(r"[,;:]$", words[k - 1]):
+            cut = k
+            break
+    return " ".join(words[:cut]).rstrip(",;:") + "…"
+
+
+def _sentences(text: str) -> list[str]:
+    return [s.strip() for s in re.split(r"(?<=[.!?])\s+", text.strip()) if len(s.split()) >= 4]
+
+
+def template_post(hook: str | None, topic: str | None, transcript: str, kind: str) -> dict:
+    """Re-hook + bullets built only from the speaker's own sentences."""
+    sents = _sentences(transcript)
+    scored = sorted(range(len(sents)), key=lambda i: -len(keywords(sents[i], 20)))[:4]
+    bullets = [_shorten(sents[i], BULLET_WORDS) for i in sorted(scored)][:4]
+    base = (topic or hook or (sents[0] if sents else "Watch this")).strip()
+    rehook = _shorten(re.sub(r"\s+", " ", base), REHOOK_WORDS).rstrip(".")
+    if len(bullets) < 3 and sents:
+        bullets = [_shorten(s, BULLET_WORDS) for s in sents[:3]]
+    return {"rehook": rehook, "bullets": bullets[:4], "source": "template", "cta": cta_for(kind)}
+
+
+def _grounded(bullet: str, transcript: str) -> bool:
+    mine = set(keywords(bullet, 30))
+    pool = set(keywords(transcript, 400))
+    return not mine or len(mine & pool) / len(mine) >= 0.6
+
+
+def _ask_post(url: str, model: str, hook: str | None, topic: str | None, transcript: str, timeout: float):
+    prompt = (f"Transcript of a short video:\n{transcript[:2400]}\n\nTopic: {topic or 'unknown'}\n"
+              f"Opening line: {hook or 'none'}\n\n"
+              'Write a social media post body as JSON: {"rehook": "core premise in fewer than 10 words", '
+              '"bullets": ["3 or 4 scannable bullets, each at most 18 words, each a point the speaker actually '
+              'made"], "hashtags": ["#tag", "#tag"]}. Use only what the transcript says.')
+    body = {"model": model, "stream": False, "format": "json", "keep_alive": 0,
+            "options": {"temperature": 0.3, "num_ctx": 4096},
+            "messages": [{"role": "system", "content": SYSTEM}, {"role": "user", "content": prompt}]}
+    try:
+        reply = httpx.post(f"{url}/api/chat", json=body, timeout=timeout)
+        reply.raise_for_status()
+        data = json.loads(reply.json()["message"]["content"])
+    except (httpx.HTTPError, ValueError, KeyError) as exc:
+        log.info("social post model unavailable (%s); using template", exc)
+        return None
+    rehook = str(data.get("rehook", "")).strip().rstrip(".")
+    bullets = [str(b).strip().lstrip("-•* ") for b in (data.get("bullets") or []) if str(b).strip()]
+    tags = data.get("hashtags")
+    if not rehook or len(rehook.split()) > REHOOK_WORDS + 1 or not 3 <= len(bullets) <= 4:
+        return None
+    if any(len(b.split()) > BULLET_WORDS + 4 or not _grounded(b, transcript) for b in bullets):
+        return None                                        # a bullet the speaker never said: refuse it
+    return {"rehook": rehook, "bullets": bullets, "hashtags": tags if isinstance(tags, list) else [],
+            "source": "ollama"}
+
+
+def social_post(hook: str | None, topic: str | None, transcript: str, *, content_style: str | None, url: str,
+                model: str, timeout: float = 90.0) -> dict:
+    """Post copy for a reel: re-hook, 3-4 bullets, call to action by clip type, hashtags. Never raises."""
+    kind = clip_type(content_style, transcript)
+    post = None
+    if transcript.strip():
+        for _ in range(2):
+            post = _ask_post(url, model, hook, topic, transcript, timeout)
+            if post:
+                break
+    if post is None:
+        post = template_post(hook, topic, transcript, kind)
+    cta = cta_for(kind)
+    body = post["rehook"] + "\n\n" + "\n".join(f"• {b}" for b in post["bullets"]) + "\n\n" + cta
+    tags = clean_tags(post.get("hashtags") or keywords(transcript), BASE_TAGS)
+    return {"caption": body, "hashtags": tags, "source": post["source"], "rehook": post["rehook"],
+            "bullets": post["bullets"], "cta": cta, "clip_type": kind}
+
+
 def describe(hook: str | None, topic: str | None, transcript: str, *, url: str, model: str,
              timeout: float = 90.0) -> dict:
     """Caption + hashtags for one reel. Never raises."""

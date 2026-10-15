@@ -111,20 +111,30 @@ answer exceeds the maximum.
 
 ## The edit
 
-* **Hook:** a verbatim line from the conversation. It is the question, the opening line, or a stronger
-  line from later in the same answer played first as a cold open. Nothing is rewritten or invented, and a
+* **Hook (first 3 seconds):** a verbatim line from the conversation, shown in one or two frames of at most
+  five words. It is the question, the opening line, or a stronger line from later in the same answer played
+  first as a cold open. Each hook is labelled with its archetype (loss avoidance, insider information, status
+  and optimisation, contrarian) when the speaker's own words fit one. Nothing is rewritten or invented, and a
   shortened line is marked with "…".
 * **Framing:** vertical crops follow the active speaker (face detection, with mouth movement choosing
   between several faces). Framing changes happen on sentence boundaries.
-* **Pacing:** silences longer than 0.85 s are tightened to 0.30 s. No word is ever removed.
+* **Pacing:** silences longer than 0.40 s are tightened to 0.18 s, and filler sounds ("um", "uh") are removed.
+  Real words are never removed, including "like" and "you know".
 * **Motion graphics:** animated title with an accent bar, a "Question" lower-third, key terms in the
   accent colour, key-phrase callouts quoted from the speaker, and an optional progress bar and closing line.
 * **Sound:** loudness matched, peaks limited, optional noise reduction, optional music that ducks under speech.
-* **Intensity:** *clean* (title and captions), *dynamic* (framing changes and callouts), *high energy*
-  (faster changes, bigger punch-ins, progress bar).
+* **Intensity** (a framing change falls between two words, so audio runs straight through every cut):
+  *clean* every 3-4 s at 1.0x/1.05x; *dynamic* every 2-2.5 s at 1.0x/1.10x/1.14x with a callout;
+  *high energy* every 1.2-1.8 s at 1.0x/1.12x/1.18x with two callouts and a progress bar.
+* **Captions:** 3-5 words per card, locked to the centre third of the frame (35%-65% of the height; 60% by
+  default), active word highlighted, bold type with a dark outline.
+* **Post copy:** a re-hook under 10 words, 3-4 bullets taken from the speaker's own sentences, and a call to
+  action by clip type (educational: "Save this guide for later.", opinion or debate: "Comment your thoughts
+  below.", business: "Send this to a teammate."), plus hashtags.
 
-Every reel is **re-listened to after rendering**: the speech is transcribed again and compared with the
-plan, so a reel that starts or stops in the wrong place is flagged instead of silently delivered.
+Every reel is **audited after rendering**: the speech is transcribed again and compared with the plan, the hook
+must be on screen in the first second, captions must be 5 words or fewer and inside the centre third, and every
+overlay must sit inside the safe area. A reel that fails is flagged "needs a look" instead of silently delivered.
 
 ## Command line
 
@@ -187,3 +197,4 @@ honest shortfalls.
 ## License
 
 [MIT](LICENSE) © 2026 VARSHITH707
+

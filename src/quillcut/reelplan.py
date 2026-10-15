@@ -17,18 +17,24 @@ from .types import AudioPlan, EditPlan, MusicBed, OutputSpec, Segment, SourceRef
 
 ASPECTS = {"9:16": (1080, 1920), "1:1": (1080, 1080), "16:9": (1920, 1080)}
 INTENSITY = {
-    # seg_max: longest stretch without a change of framing; zooms cycle through `zooms`
-    "clean": {"seg_max": 40.0, "zooms": [1.0], "callouts": 0, "lower_third": False, "cold_open": False,
+    # cut: (shortest, longest) seconds between framing changes; zooms cycle through `zooms`
+    "clean": {"cut": (3.0, 4.0), "zooms": [1.0, 1.05], "callouts": 0, "lower_third": False, "cold_open": False,
               "progress": False, "emphasis": 4},
-    "dynamic": {"seg_max": 9.0, "zooms": [1.0, 1.10], "callouts": 1, "lower_third": True, "cold_open": True,
-                "progress": False, "emphasis": 6},
-    "high_energy": {"seg_max": 6.0, "zooms": [1.0, 1.12, 1.0, 1.18], "callouts": 2, "lower_third": True,
+    "dynamic": {"cut": (2.0, 2.5), "zooms": [1.0, 1.10, 1.14], "callouts": 1, "lower_third": True,
+                "cold_open": True, "progress": False, "emphasis": 6},
+    "high_energy": {"cut": (1.2, 1.8), "zooms": [1.0, 1.12, 1.18], "callouts": 2, "lower_third": True,
                     "cold_open": True, "progress": True, "emphasis": 8},
 }
-PAUSE_MAX = 0.85          # silences longer than this are tightened
-PAUSE_KEEP = 0.30         # what is left of a tightened silence
-HOOK_SECONDS = 2.8
-HOOK_MAX_WORDS = 14
+PAUSE_MAX = 0.40          # silences longer than this are tightened
+PAUSE_KEEP = 0.18         # what is left of a tightened silence (0.15-0.20 s)
+FILLERS = {"um", "umm", "uh", "uhh", "er", "erm", "ah", "hmm", "hm", "mm", "mhm"}   # sounds, never meaning
+HOOK_SECONDS = 3.0        # the hook lives in the first three seconds
+HOOK_FRAME_WORDS = 5      # at most 5 words on screen per hook frame
+HOOK_MAX_WORDS = 10       # two frames of up to five words
+CAPTION_MAX_WORDS = 5     # 3-5 words per caption card
+CAPTION_Y = 0.60          # speech captions sit in the centre third of the frame (35%-65%)
+CAPTION_BAND = (0.35, 0.65)
+CALLOUT_Y = 0.45          # above the captions, still inside the safe area
 
 
 @dataclass
@@ -43,6 +49,7 @@ class PlanOptions:
     accent: str = "F85830"
     show_question_label: bool = True
     logo: str | None = None            # path to a brand image shown on every frame
+    caption_y: float | None = None     # caption centre as a fraction of height; kept inside 0.35-0.65
 
 
 @dataclass
@@ -68,37 +75,84 @@ def layout_for(ref: SourceRef, out_w: int, out_h: int, max_upscale: float) -> st
 
 
 def trim_pauses(words: list[dict], start: float, end: float) -> list[tuple[float, float]]:
-    """Keep intervals of the range with long silences tightened. Never cuts through a word."""
+    """Intervals of the range with dead air and filler sounds taken out. Never cuts through a spoken word.
+
+    A silence longer than PAUSE_MAX is tightened to PAUSE_KEEP. A filler ("um", "uh") is removed together
+    with the silence around it; only these non-word sounds are ever dropped."""
     cuts: list[tuple[float, float]] = []
-    for a, b in zip(words, words[1:]):
-        if b["start"] - a["end"] > PAUSE_MAX:
-            cuts.append((a["end"] + PAUSE_KEEP / 2, b["start"] - PAUSE_KEEP / 2))
+    prev: dict | None = None
+    pending: list[dict] = []
+    for w in words:
+        if cv.clean_word(w["word"]) in FILLERS:
+            pending.append(w)
+            continue
+        if prev is not None:
+            gap = w["start"] - prev["end"]
+            if pending:                                  # cover the filler completely
+                c0 = min(prev["end"] + PAUSE_KEEP / 2, pending[0]["start"] - 0.02)
+                c1 = max(w["start"] - PAUSE_KEEP / 2, pending[-1]["end"] + 0.02)
+                if c1 - c0 > 0.04:
+                    cuts.append((max(c0, prev["end"] + 0.01), min(c1, w["start"] - 0.01)))
+            elif gap > PAUSE_MAX:
+                cuts.append((prev["end"] + PAUSE_KEEP / 2, w["start"] - PAUSE_KEEP / 2))
+        pending = []
+        prev = w
     out, t = [], start
     for c0, c1 in cuts:
         if c0 > t:
             out.append((round(t, 3), round(c0, 3)))
-        t = c1
+        t = max(t, c1)
     out.append((round(t, 3), round(end, 3)))
-    return [(a, b) for a, b in out if b - a >= 0.3]
+    # an interval is dropped only when it holds no spoken word (pure silence); a short one with a word stays
+    spoken = [w for w in words if cv.clean_word(w["word"]) not in FILLERS]
+    return [(a, b) for a, b in out
+            if b - a >= 0.1 and any(w["start"] >= a - 1e-6 and w["end"] <= b + 1e-6 for w in spoken)]
 
 
-def split_at_sentences(interval: tuple[float, float], sentences: list[cv.Sentence],
-                       seg_max: float) -> list[tuple[float, float]]:
-    """Cut a long interval at sentence boundaries so framing can change; contiguous pieces share the cut."""
+def split_by_velocity(interval: tuple[float, float], words: list[dict],
+                      cut: tuple[float, float]) -> list[tuple[float, float]]:
+    """Cut an interval every `cut` seconds so the framing can change. Cuts fall between two words (or in a
+    pause), the pieces are contiguous, and the audio runs straight through every join."""
+    lo, hi = cut
     a, b = interval
-    if b - a <= seg_max:
+    inside = [w for w in words if w["end"] > a and w["start"] < b]
+    bounds = [round((p["end"] + n["start"]) / 2, 3) for p, n in zip(inside, inside[1:])
+              if a + 0.15 < (p["end"] + n["start"]) / 2 < b - 0.15 and n["start"] >= p["end"] - 1e-6]
+    if b - a <= hi or not bounds:
         return [interval]
-    bounds = []
-    for p, n in zip(sentences, sentences[1:]):
-        if a < p.end and n.start < b and n.start - p.end > 0.0:
-            bounds.append(round(p.end + (n.start - p.end) / 2, 3))
-    pieces, cur = [], a
-    for t in bounds:
-        if t - cur >= 0.6 * seg_max and b - t >= 1.2:
-            pieces.append((cur, t))
-            cur = t
+    pieces, cur, k = [], a, 0
+    cycle = (lo, hi, (lo + hi) / 2)
+    while b - cur > hi:
+        want = cur + cycle[k % 3]
+        k += 1
+        usable = [t for t in bounds if t > cur + 0.6 * lo and b - t >= 0.6 * lo]
+        if not usable:
+            break
+        nxt = min(usable, key=lambda t: abs(t - want))
+        pieces.append((cur, nxt))
+        cur = nxt
     pieces.append((cur, b))
     return pieces
+
+
+def hook_frames(text: str) -> list[str]:
+    """Split a verbatim hook into frames of at most HOOK_FRAME_WORDS words (two frames over the first 3 s).
+    A line longer than two frames is shortened and marked with an ellipsis."""
+    words = text.rstrip("…").split()
+    shortened = text.endswith("…") or len(words) > HOOK_MAX_WORDS
+    words = words[:HOOK_MAX_WORDS]
+    if len(words) <= HOOK_FRAME_WORDS:
+        frames = [words]
+    else:
+        # split near the middle, preferring a clause boundary
+        mid = len(words) // 2
+        best = min(range(max(1, len(words) - HOOK_FRAME_WORDS), min(HOOK_FRAME_WORDS, len(words) - 1) + 1),
+                   key=lambda k: (not re.search(r"[,;:.]$", words[k - 1]), abs(k - mid)))
+        frames = [words[:best], words[best:]]
+    out = [" ".join(f).rstrip(",;:") for f in frames if f]
+    if shortened and out:
+        out[-1] = out[-1].rstrip(".") + "…"
+    return out
 
 
 def key_terms(sentences: list[cv.Sentence], limit: int) -> list[str]:
@@ -139,20 +193,14 @@ def choose_hook(sentences: list[cv.Sentence], c: cv.Candidate, allow_cold_open: 
             strength = cv.hook_strength(s)
             if strength >= 0.6 and strength >= base + 0.15 and (cold is None or strength > cv.hook_strength(cold)):
                 cold = s
+    # The words are always the speaker's. The archetype only labels what kind of hook the line is.
     if cold is not None:
-        return {"kind": "cold_open", "sentence": cold, "text": cold.text}
-    if question is not None and question.n_words <= HOOK_MAX_WORDS + 4:
-        return {"kind": "question", "sentence": question, "text": question.text}
-    text = first.text
-    if first.n_words > HOOK_MAX_WORDS:
-        words = text.split()
-        cut = HOOK_MAX_WORDS
-        for k in range(HOOK_MAX_WORDS, 5, -1):          # prefer a clause boundary
-            if re.search(r"[,;:]$", words[k - 1]):
-                cut = k
-                break
-        text = " ".join(words[:cut]).rstrip(",;:") + "…"    # the ellipsis marks it as an excerpt, not a full quote
-    return {"kind": "opening", "sentence": first, "text": text}
+        return {"kind": "cold_open", "sentence": cold, "text": cold.text,
+                "archetype": cv.classify_archetype(cold.text)}
+    if question is not None and question.n_words <= 18:
+        return {"kind": "question", "sentence": question, "text": question.text,
+                "archetype": cv.classify_archetype(question.text)}
+    return {"kind": "opening", "sentence": first, "text": first.text, "archetype": cv.classify_archetype(first.text)}
 
 
 def map_words(segments: list[Segment], words: list[dict]) -> list[dict]:
@@ -176,21 +224,28 @@ def speech_spans(words: list[dict], gap: float = 0.45) -> list[tuple[float, floa
     return [(round(a, 3), round(b, 3)) for a, b in spans]
 
 
-def fit_hook(hook: dict, start: float, end: float, style: dict, safe: dict):
-    """Hook card for the verbatim line; if it is too long for the safe area, keep a shorter verbatim prefix
-    ending in an ellipsis so it still reads as an excerpt."""
-    words = hook["text"].rstrip("…").split()
-    for n in range(len(words), 2, -1):
-        text = " ".join(words[:n]).rstrip(",;:.")
-        if n < len(words) or hook["text"].endswith("…"):
-            text += "…"
-        try:
-            card = hook_card(text, start, end, style, safe)
-        except ValueError:
-            continue
-        hook["text"] = text
-        return card
-    raise ValueError(f"hook cannot be fitted on screen: {hook['text']!r}")
+def hook_cards(hook: dict, start: float, end: float, style: dict, safe: dict) -> list:
+    """The hook as one or two on-screen frames of at most five words each, shown across the first seconds.
+    A frame that does not fit the safe area is shortened (and marked with an ellipsis), never overflowed."""
+    frames = hook_frames(hook["text"])
+    cards, shown = [], []
+    span = (end - start) / max(len(frames), 1)
+    for i, frame in enumerate(frames):
+        words = frame.rstrip("…").split()
+        marked = frame.endswith("…")
+        for n in range(len(words), 1, -1):
+            text = " ".join(words[:n]).rstrip(",;:.") + ("…" if marked or n < len(words) else "")
+            try:
+                cards.append(hook_card(text, round(start + i * span, 3), round(start + (i + 1) * span, 3), style, safe))
+            except ValueError:
+                continue
+            shown.append(text)
+            break
+        else:
+            raise ValueError(f"hook cannot be fitted on screen: {frame!r}")
+    hook["frames"] = shown
+    hook["text"] = " ".join(shown)
+    return cards
 
 
 def _first_time(mapped: list[dict], first_word: str, after: float) -> float | None:
@@ -222,7 +277,7 @@ def build(c: cv.Candidate, sentences: list[cv.Sentence], ref: SourceRef, cfg: di
 
     shots: list[tuple[float, float]] = []
     for interval in trim_pauses(words, c.start, c.end):
-        shots += split_at_sentences(interval, body, knobs["seg_max"])
+        shots += split_by_velocity(interval, words, knobs["cut"])
     all_shots = ([cold_seg] if cold_seg else []) + shots
 
     centers: list[float | None] = [None] * len(all_shots)
@@ -243,9 +298,13 @@ def build(c: cv.Candidate, sentences: list[cv.Sentence], ref: SourceRef, cfg: di
                                 rationale="cold-open hook line" if is_cold else f"conversation shot {k + 1}, zoom {zoom:g}"))
     duration = round(sum(s.out_duration for s in segments), 3)
 
+    # captions: centre third of the frame, 3-5 words per card
+    cy = min(max(options.caption_y or CAPTION_Y, CAPTION_BAND[0]), CAPTION_BAND[1])
+    st["speech"] = {**st["speech"], "y": cy, "words_per_card": min(int(st["speech"].get("words_per_card", 4)), 5)}
+
     cards = []
-    hook_start, hook_end = 0.15, min(HOOK_SECONDS, max(1.5, duration * 0.2))
-    cards.append(fit_hook(hook, hook_start, hook_end, st, safe))
+    hook_start, hook_end = 0.1, min(HOOK_SECONDS, max(1.5, duration * 0.2))
+    cards += hook_cards(hook, hook_start, hook_end, st, safe)
     mapped = map_words(segments, words)
     cards += speech_cards(mapped, duration, st, safe, set(key_terms(body, knobs["emphasis"])))
 
@@ -264,11 +323,11 @@ def build(c: cv.Candidate, sentences: list[cv.Sentence], ref: SourceRef, cfg: di
         if t is not None and t < duration - 2.0:
             text = phrase.lower() if st.get("case") == "lower" else phrase
             try:
-                cards.append(callout_card(text, t, min(t + 2.6, duration), st, safe))
+                cards.append(callout_card(text, t, min(t + 2.6, duration), st, safe, y=CALLOUT_Y))
             except ValueError:
                 pass
     if options.cta and duration > 6:
-        cards.append(cta_card(options.cta, max(0.0, duration - 2.6), duration, st, safe, y=0.42))
+        cards.append(cta_card(options.cta, max(0.0, duration - 2.6), duration, st, safe, y=0.36))
 
     audio = AudioPlan(target_lufs=cfg["audio"]["target_lufs"], true_peak_max=cfg["audio"]["true_peak_max"],
                       fade_out=0.25, denoise=options.denoise)
@@ -284,7 +343,9 @@ def build(c: cv.Candidate, sentences: list[cv.Sentence], ref: SourceRef, cfg: di
         script="conversation", sources={"a": ref}, rights=rights,
         moment={"type": "conversation", "unit": c.unit, "start": c.start, "end": c.end,
                 "question_included": c.question_included, "partial": c.partial, "scores": c.scores,
-                "score": c.score, "reasons": c.reasons, "hook": {"kind": hook["kind"], "text": hook["text"]},
+                "score": c.score, "reasons": c.reasons,
+                "hook": {"kind": hook["kind"], "text": hook["text"], "archetype": hook.get("archetype"),
+                         "frames": hook.get("frames", [])},
                 "rationale": "complete conversational unit selected from the full transcript"},
         segments=segments, text_cards=cards, caption_style=st, audio=audio,
         output=OutputSpec(width=out_w, height=out_h, fps=ref.fps),

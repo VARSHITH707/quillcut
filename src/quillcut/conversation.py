@@ -317,6 +317,29 @@ def build_units(sentences: list[Sentence]) -> list[Unit]:
 
 # --------------------------------------------------------------------------------------------- scoring
 
+# Hook archetypes. They describe what kind of opening a line already is; they never generate wording.
+ARCHETYPES = {
+    "loss_avoidance": ("stop", "never", "mistake", "mistakes", "avoid", "don't", "dont", "waste", "wasted",
+                       "costly", "lose", "losing", "failed", "regret"),
+    "information_asymmetry": ("secret", "nobody", "no one", "truth", "hidden", "most people", "rarely",
+                              "don't tell", "never tell", "what they"),
+    "status_optimization": ("best", "top", "master", "optimize", "optimise", "faster", "10x", "system",
+                            "habit", "habits", "productive", "leverage", "elite", "level up", "outperform"),
+    "contrarian": ("actually", "myth", "opposite", "everything you know", "contrary", "overrated", "backwards",
+                   "not what", "wrong"),
+}
+
+
+def classify_archetype(text: str) -> str | None:
+    """Which of the four hook archetypes a line already is, from the speaker's own words (None if none)."""
+    low = " " + re.sub(r"[^a-z0-9' ]", " ", text.lower()) + " "
+    best, best_n = None, 0
+    for name, cues in ARCHETYPES.items():
+        n = sum(1 for cue in cues if f" {cue} " in low)
+        if n > best_n:
+            best, best_n = name, n
+    return best
+
 
 def hook_strength(s: Sentence) -> float:
     """0-1 estimate of how well one sentence opens a reel, from surface features only."""
@@ -338,6 +361,8 @@ def hook_strength(s: Sentence) -> float:
         score -= 0.30
     if s.complete:
         score += 0.10
+    if classify_archetype(s.text):
+        score += 0.08
     return max(0.0, min(1.0, score + 0.15))
 
 
