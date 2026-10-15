@@ -18,6 +18,10 @@ PAUSE_BREAK = 0.25
 MIN_WORD_PROB = 0.5
 
 
+def clean_word(text: str) -> str:
+    return re.sub(r"[^a-z0-9']", "", text.lower())
+
+
 def script_of(text: str) -> str:
     return "devanagari" if DEVANAGARI.search(text) else "latin"
 
@@ -37,13 +41,20 @@ def _width(text: str, font: dict, size: int, stroke: int) -> float:
     return (right - left) * synth_bold + 2 * stroke
 
 
-def _allowed_width(top: float, bottom: float, safe: dict) -> float:
-    left = safe["left"] * W
-    right = (1 - safe["right"]) * W
+def canvas_of(style: dict) -> tuple[int, int]:
+    """Output canvas for layout: a style may carry {"canvas": [w, h]}; default is vertical 1080x1920."""
+    c = style.get("canvas")
+    return (int(c[0]), int(c[1])) if c else (W, H)
+
+
+def _allowed_width(top: float, bottom: float, safe: dict, canvas: tuple[int, int] = (W, H)) -> float:
+    cw, ch = canvas
+    left = safe["left"] * cw
+    right = (1 - safe["right"]) * cw
     rail = safe.get("right_rail")
-    if rail and bottom > rail["y_from"] * H:
-        right = min(right, rail["x_from"] * W)
-    return 2 * min(W / 2 - left, right - W / 2)
+    if rail and bottom > rail["y_from"] * ch:
+        right = min(right, rail["x_from"] * cw)
+    return 2 * min(cw / 2 - left, right - cw / 2)
 
 
 def _wrap(words: list[str], font: dict, size: int, stroke: int, max_w: float, max_lines: int):
@@ -59,28 +70,39 @@ def _wrap(words: list[str], font: dict, size: int, stroke: int, max_w: float, ma
     return lines
 
 
+def _balance(lines: list[list[str]], font: dict, size: int, stroke: int, max_w: float) -> list[list[str]]:
+    """Avoid a lone word on the second line ("in the afternoon / i"): move one word down when it still fits."""
+    if len(lines) == 2 and len(lines[1]) == 1 and len(lines[0]) >= 3:
+        trial = [lines[0][:-1], [lines[0][-1], *lines[1]]]
+        if all(_width(" ".join(t), font, size, stroke) <= max_w for t in trial):
+            return trial
+    return lines
+
+
 def layout_text(text: str, block: dict, style: dict, safe: dict):
     """Return (lines, font_spec, size, pos, bbox_norm) or None when it cannot fit."""
     font = style["fonts"][script_of(text)]
     stroke = style["stroke_px"]
     words = text.split()
-    y = block["y"] * H
+    cw, ch = canvas_of(style)
+    y = block["y"] * ch
     for size in range(block["size"], block["min_size"] - 1, -2):
         ascent, descent = _pil_font(font["file"], font.get("index", 0), size).getmetrics()
         line_h = ascent + descent
         worst_bottom = y + block["max_lines"] * line_h / 2
-        max_w = _allowed_width(y - block["max_lines"] * line_h / 2, worst_bottom, safe)
+        max_w = _allowed_width(y - block["max_lines"] * line_h / 2, worst_bottom, safe, (cw, ch))
         lines = _wrap(words, font, size, stroke, max_w, block["max_lines"])
         if not lines:
             continue
+        lines = _balance(lines, font, size, stroke, max_w)
         height = len(lines) * line_h
         top, bottom = y - height / 2, y + height / 2
-        if top < safe["top"] * H or bottom > (1 - safe["bottom"]) * H:
+        if top < safe["top"] * ch or bottom > (1 - safe["bottom"]) * ch:
             continue
         width = max(_width(" ".join(line), font, size, stroke) for line in lines)
-        bbox = (round((W - width) / 2 / W, 4), round(top / H, 4),
-                round((W + width) / 2 / W, 4), round(bottom / H, 4))
-        return [" ".join(line) for line in lines], font, size, (W // 2, int(y)), bbox
+        bbox = (round((cw - width) / 2 / cw, 4), round(top / ch, 4),
+                round((cw + width) / 2 / cw, 4), round(bottom / ch, 4))
+        return [" ".join(line) for line in lines], font, size, (cw // 2, int(y)), bbox
     return None
 
 
@@ -95,9 +117,59 @@ def hook_card(text: str, start: float, end: float, style: dict, safe: dict, kind
                     font_size=size, pos=pos, bbox_norm=bbox)
 
 
-def speech_cards(words: list[dict], clip_duration: float, style: dict, safe: dict) -> list[TextCard]:
+def lower_third_card(text: str, start: float, end: float, style: dict, safe: dict, y: float = 0.80,
+                     size: int = 46) -> TextCard:
+    """Left-aligned label bar. `pos` is the text's left edge and vertical centre."""
+    cw, ch = canvas_of(style)
+    font = style["fonts"][script_of(text)]
+    stroke = 0
+    max_w = cw * (1 - safe["left"] - safe["right"]) - 80
+    use = size
+    while use > 28 and _width(text, font, use, stroke) > max_w:
+        use -= 2
+    width = _width(text, font, use, stroke)
+    if width > max_w:                              # last resort: trim at a word boundary
+        words = text.split()
+        while len(words) > 1 and _width(" ".join(words) + "…", font, use, stroke) > max_w:
+            words.pop()
+        text = " ".join(words) + "…"
+        width = _width(text, font, use, stroke)
+    ascent, descent = _pil_font(font["file"], font.get("index", 0), use).getmetrics()
+    height = ascent + descent
+    x_left = safe["left"] * cw + 40
+    cy = y * ch
+    bbox = (round((x_left - 40) / cw, 4), round((cy - height / 2 - 14) / ch, 4),
+            round((x_left + width + 28) / cw, 4), round((cy + height / 2 + 14) / ch, 4))
+    return TextCard(kind="lower_third", text=text, start=start, end=end, lines=[text], font=font["family"],
+                    font_size=use, pos=(int(x_left), int(cy)), bbox_norm=bbox)
+
+
+def callout_card(text: str, start: float, end: float, style: dict, safe: dict, y: float = 0.56) -> TextCard:
+    """Key-phrase pill, centred, placed above the speech captions."""
+    block = {"y": y, "size": 60, "min_size": 40, "max_lines": 1}
+    fitted = layout_text(text, block, style, safe)
+    if fitted is None:
+        raise ValueError(f"callout does not fit: {text!r}")
+    lines, font, size, pos, bbox = fitted
+    return TextCard(kind="callout", text=text, start=start, end=end, lines=lines, font=font["family"],
+                    font_size=size, pos=pos, bbox_norm=bbox)
+
+
+def cta_card(text: str, start: float, end: float, style: dict, safe: dict, y: float = 0.62) -> TextCard:
+    block = {"y": y, "size": 72, "min_size": 44, "max_lines": 2}
+    fitted = layout_text(text, block, style, safe)
+    if fitted is None:
+        raise ValueError(f"cta does not fit: {text!r}")
+    lines, font, size, pos, bbox = fitted
+    return TextCard(kind="cta", text=text, start=start, end=end, lines=lines, font=font["family"],
+                    font_size=size, pos=pos, bbox_norm=bbox)
+
+
+def speech_cards(words: list[dict], clip_duration: float, style: dict, safe: dict,
+                 emphasis: set[str] | None = None) -> list[TextCard]:
     """Group clip-time words into cards: break on pauses, punctuation and the word cap."""
     block = style["speech"]
+    emphasis = emphasis or set()
     words = [w for w in words if w.get("probability", 1) >= MIN_WORD_PROB and w["word"].strip()]
     joined: list[dict] = []
     for w in words:               # whisper splits "out-of-the-box" and "160,000" into fragments
@@ -138,7 +210,9 @@ def speech_cards(words: list[dict], clip_duration: float, style: dict, safe: dic
         lines, font, size, pos, bbox = fitted
         cards.append(TextCard(kind="speech", text=" ".join(clean), start=round(start, 3), end=round(end, 3),
                               lines=lines, font=font["family"], font_size=size, pos=pos, bbox_norm=bbox,
-                              words=[Word(text=c, start=w["start"], end=w["end"]) for c, w in zip(clean, group)]))
+                              words=[Word(text=c, start=w["start"], end=w["end"],
+                                          emphasis=clean_word(c) in emphasis and len(clean_word(c)) > 3)
+                                     for c, w in zip(clean, group)]))
     return cards
 
 
@@ -167,12 +241,28 @@ def _ass_size(card: TextCard, style: dict) -> int:
     return round(ascent + descent)
 
 
+DEFAULT_ACCENT = "F85830"          # the Quillcut orange; a style can override with colors.accent
+
+
+def _rect(x0: float, y0: float, x1: float, y1: float) -> str:
+    return f"m {x0:.0f} {y0:.0f} l {x1:.0f} {y0:.0f} {x1:.0f} {y1:.0f} {x0:.0f} {y1:.0f}"
+
+
+def _drawing(layer: int, start: float, end: float, x: float, y: float, shape: str, colour: str,
+             alpha: str = "00", anim: str = "") -> str:
+    return (f"Dialogue: {layer},{_ass_time(start)},{_ass_time(end)},Q,,0,0,0,,"
+            f"{{\\an7\\pos({x:.0f},{y:.0f})\\bord0\\shad0\\1c{colour}\\1a&H{alpha}&{anim}\\p1}}{shape}{{\\p0}}")
+
+
 def build_ass(cards: list[TextCard], style: dict) -> str:
     base, active = _ass_color(style["colors"]["base"]), _ass_color(style["colors"]["active"])
     stroke = _ass_color(style["colors"]["stroke"])
+    accent = _ass_color(style["colors"].get("accent", DEFAULT_ACCENT))
+    ink = _ass_color("101010")
     latin = style["fonts"]["latin"]["family"]
+    cw, ch = canvas_of(style)
     header = (
-        "[Script Info]\nScriptType: v4.00+\nPlayResX: 1080\nPlayResY: 1920\nWrapStyle: 2\n"
+        f"[Script Info]\nScriptType: v4.00+\nPlayResX: {cw}\nPlayResY: {ch}\nWrapStyle: 2\n"
         "ScaledBorderAndShadow: yes\n\n[V4+ Styles]\n"
         "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, "
         "Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, "
@@ -182,13 +272,40 @@ def build_ass(cards: list[TextCard], style: dict) -> str:
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n")
     events = []
     pop = "\\fscx92\\fscy92\\t(0,120,\\fscx100\\fscy100)"
+    title_pop = "\\fad(110,180)\\fscx72\\fscy72\\t(0,200,\\fscx106\\fscy106)\\t(200,330,\\fscx100\\fscy100)"
     for card in cards:
         bold = "\\b1" if card.font != latin else ""
-        prefix = f"\\pos({card.pos[0]},{card.pos[1]})\\fn{card.font}\\fs{_ass_size(card, style)}{bold}"
+        size = _ass_size(card, style)
+        prefix = f"\\pos({card.pos[0]},{card.pos[1]})\\fn{card.font}\\fs{size}{bold}"
+        t0, t1 = _ass_time(card.start), _ass_time(card.end)
+        x0, y0, x1, y1 = (card.bbox_norm[0] * cw, card.bbox_norm[1] * ch, card.bbox_norm[2] * cw,
+                          card.bbox_norm[3] * ch)
+        text = "\\N".join(_escape(line) for line in card.lines)
+
+        if card.kind == "hook":
+            bar_w = x1 - x0
+            events.append(_drawing(0, card.start, card.end, x0, y1 + 12, _rect(0, 0, bar_w, 12), accent,
+                                   anim="\\fscx0\\fad(0,180)\\t(120,520,\\fscx100)"))
+            events.append(f"Dialogue: 1,{t0},{t1},Q,,0,0,0,,{{{prefix}{title_pop}}}{text}")
+            continue
+        if card.kind == "lower_third":
+            pad, bar = 22, 10
+            events.append(_drawing(0, card.start, card.end, x0, y0, _rect(0, 0, x1 - x0, y1 - y0), ink, alpha="55",
+                                   anim="\\fad(140,160)"))
+            events.append(_drawing(1, card.start, card.end, x0, y0, _rect(0, 0, bar, y1 - y0), accent,
+                                   anim="\\fad(140,160)"))
+            events.append(f"Dialogue: 2,{t0},{t1},Q,,0,0,0,,{{\\an4\\pos({x0 + bar + pad:.0f},{card.pos[1]})"
+                          f"\\fn{card.font}\\fs{size}{bold}\\bord0\\shad0\\fad(140,160)}}{text}")
+            continue
+        if card.kind == "callout":
+            events.append(f"Dialogue: 1,{t0},{t1},Q,,0,0,0,,{{{prefix}\\c{ink}\\3c{accent}\\bord16\\shad0"
+                          f"\\fad(100,160)\\fscx60\\fscy60\\t(0,180,\\fscx106\\fscy106)\\t(180,300,\\fscx100\\fscy100)}}{text}")
+            continue
+        if card.kind == "cta":
+            events.append(f"Dialogue: 1,{t0},{t1},Q,,0,0,0,,{{{prefix}\\fad(150,0){pop}}}{text}")
+            continue
         if card.kind != "speech" or not card.words:
-            text = "\\N".join(_escape(line) for line in card.lines)
-            events.append(f"Dialogue: 0,{_ass_time(card.start)},{_ass_time(card.end)},Q,,0,0,0,,"
-                          f"{{{prefix}{pop}}}{text}")
+            events.append(f"Dialogue: 0,{t0},{t1},Q,,0,0,0,,{{{prefix}{pop}}}{text}")
             continue
         per_line = [len(line.split()) for line in card.lines]
         for i, word in enumerate(card.words):
@@ -200,8 +317,14 @@ def build_ass(cards: list[TextCard], style: dict) -> str:
             for count in per_line:
                 line_tokens = []
                 for _ in range(count):
-                    token = _escape(card.words[k].text)
-                    line_tokens.append(f"{{\\c{active}}}{token}{{\\c{base}}}" if k == i else token)
+                    w = card.words[k]
+                    token = _escape(w.text)
+                    if k == i:
+                        line_tokens.append(f"{{\\c{active}}}{token}{{\\c{base}}}")
+                    elif w.emphasis:
+                        line_tokens.append(f"{{\\c{accent}\\fscx112\\fscy112}}{token}{{\\c{base}\\fscx100\\fscy100}}")
+                    else:
+                        line_tokens.append(token)
                     k += 1
                 tokens.append(" ".join(line_tokens))
             anim = pop if i == 0 else ""

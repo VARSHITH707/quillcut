@@ -201,6 +201,27 @@ def cmd_batch(args) -> int:
     return code
 
 
+def cmd_clip(args) -> int:
+    """Conversation-aware clipping: complete answers, per-reel durations, full edit."""
+    from . import reelplan
+    from .conversation_job import run
+    try:
+        targets = [float(t) for t in args.targets.split(",") if t.strip()]
+    except ValueError:
+        print("--targets must be seconds separated by commas, for example 35,60,90")
+        return 2
+    if not targets:
+        print("--targets needs at least one duration")
+        return 2
+    options = reelplan.PlanOptions(intensity=args.intensity, aspect=args.aspect, cta=args.cta)
+    out = run(Path(args.video), rights=args.rights, targets=targets, caption_style=args.style, options=options,
+              strict=args.strict, include_question=args.include_question, fast=args.fast,
+              use_llm=not args.no_llm, verify=not args.no_verify,
+              publish_dir=Path(args.out) if args.out else None, profile=args.content_style)
+    _print(out)
+    return 0 if all(r.get("qc") == "PASS" or r.get("rejected") for r in out["results"]) else 1
+
+
 def cmd_web(args) -> int:
     from .web.server import serve
     serve(args.port, open_browser=not args.no_browser)
@@ -268,6 +289,26 @@ def main(argv=None) -> int:
     b.add_argument("folder")
     b.add_argument("--fast", action="store_true")
     b.set_defaults(fn=cmd_batch)
+
+    cl = sub.add_parser("clip", help="conversation-aware reels: complete answers, per-reel durations, full edit")
+    cl.add_argument("video")
+    cl.add_argument("--targets", default="45", help="target seconds per reel, comma separated, e.g. 35,60,90")
+    cl.add_argument("--rights", help="own_footage | client_owned | client_licensed | cc_verified")
+    cl.add_argument("--intensity", choices=["clean", "dynamic", "high_energy"], default="dynamic")
+    cl.add_argument("--aspect", choices=["9:16", "1:1", "16:9"], default="9:16")
+    cl.add_argument("--style", default=None, help="caption style, e.g. gaming_bold, brand_clean")
+    cl.add_argument("--content-style", dest="content_style", default=None,
+                    choices=["educational", "storytelling", "motivational", "podcast", "interview", "debate",
+                             "business"])
+    cl.add_argument("--include-question", dest="include_question", choices=["auto", "yes", "no"], default="auto")
+    cl.add_argument("--strict", action="store_true",
+                    help="never run past the target; report the conflict instead of keeping the full answer")
+    cl.add_argument("--cta", default=None, help="closing line shown over the last seconds")
+    cl.add_argument("--out", default=None, help="folder for the finished reels")
+    cl.add_argument("--fast", action="store_true", help="veryfast encode (drafts)")
+    cl.add_argument("--no-llm", dest="no_llm", action="store_true", help="skip the local-model second opinion")
+    cl.add_argument("--no-verify", dest="no_verify", action="store_true", help="skip re-listening to each reel")
+    cl.set_defaults(fn=cmd_clip)
 
     w = sub.add_parser("web", help="open the drag-and-drop app in your browser (this computer only)")
     w.add_argument("--port", type=int, default=8765)

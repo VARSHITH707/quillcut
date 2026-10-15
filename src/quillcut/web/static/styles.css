@@ -1,4 +1,4 @@
-/* Quillcut Studio — brand tokens come from the logo: ink black, warm paper, signal orange. */
+﻿/* Quillcut Studio â€” brand tokens come from the logo: ink black, warm paper, signal orange. */
 :root {
   --ink: #101010;
   --paper: #faf8f4;
@@ -263,4 +263,59 @@ select {
   html { scroll-behavior: auto; }
   *, *::before, *::after { transition: none !important; animation: none !important; }
   .reel:nth-child(odd), .reel:nth-child(even) { transform: none; }
+}
+
+/* --- conversation features --------------------------------------------------------------------------- */
+.analysis { margin-top: 18px; padding: 16px; border: var(--line); border-radius: 16px; background: var(--paper); }
+.analysis__state { font-weight: 700; margin-bottom: 8px; }
+.analysis__headline { font-family: var(--display); text-transform: uppercase; font-size: 0.95rem; margin-bottom: 10px; }
+.moments { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.moments li { display: grid; gap: 2px; padding: 10px 12px; border: 1.5px solid var(--ink); border-radius: 12px; background: #fff; }
+.moment__time { font-weight: 800; font-size: 0.82rem; }
+.moment__tag { font-size: 0.74rem; color: var(--muted); font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
+.moments q { font-size: 0.92rem; }
+.seg__custom span { display: inline-flex; align-items: center; gap: 8px; }
+.seg input[type="number"], .reel-row input[type="number"], #cta, input[type="text"] {
+  font: inherit; width: 72px; padding: 4px 8px; border: var(--line); border-radius: 10px; background: #fff;
+}
+#cta { width: 100%; }
+.reels-config { display: grid; gap: 10px; margin: 12px 0 16px; }
+.reel-row { display: grid; grid-template-columns: 64px 1fr auto; gap: 10px; align-items: center; padding: 10px 12px; border: var(--line); border-radius: 16px; background: var(--paper); }
+.reel-row__label { font-family: var(--display); text-transform: uppercase; font-size: 0.78rem; }
+.reel-row__custom { display: flex; gap: 6px; align-items: center; font-weight: 700; font-size: 0.82rem; }
+.seg--small span { padding: 5px 11px; font-size: 0.84rem; min-width: 0; }
+.field-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 14px; margin-top: 14px; }
+.check--soft { border-style: dashed; background: var(--paper); font-weight: 500; }
+.hint--warn { color: var(--bad); font-weight: 700; }
+.stages { display: flex; flex-wrap: wrap; gap: 6px; list-style: none; padding: 0; margin: 10px 0; }
+.stages li { padding: 4px 10px; border: 1.5px solid var(--ink); border-radius: 999px; font-size: 0.8rem; font-weight: 700; opacity: .45; background: #fff; }
+.stages li.is-now { opacity: 1; background: var(--orange); }
+.stages li.is-done { opacity: 1; background: #d6f5dd; }
+.reel__dur { font-size: 0.9rem; }
+.reel__dur b { font-family: var(--display); font-size: 1.05rem; }
+.reel__note { font-size: 0.86rem; color: var(--muted); }
+.reel__hook q { font-weight: 700; }
+.reel__hook small { text-transform: uppercase; letter-spacing: .04em; font-weight: 800; color: var(--orange-deep); }
+.badge--warn { background: var(--warn-bg); }
+.badge--ext { background: #ffe4dc; }
+.reel__more summary { cursor: pointer; font-weight: 700; font-size: 0.86rem; }
+.checks, .reasons { margin: 8px 0 0; padding-left: 0; list-style: none; font-size: 0.82rem; display: grid; gap: 4px; }
+.checks .ok { color: var(--ok); }
+.checks .warn { color: #8a6100; }
+.checks .bad { color: var(--bad); font-weight: 700; }
+.reasons li { color: var(--muted); }
+.reel__row--regen select { font: inherit; padding: 6px 10px; border: var(--line); border-radius: 999px; background: #fff; }
+.messages { margin: 0 0 12px; padding-left: 18px; color: var(--muted); }
+.phone[data-aspect="1:1"] { max-width: 260px; }
+.phone[data-aspect="16:9"] { max-width: 320px; }
+.phone { aspect-ratio: var(--ar, 9 / 16); }
+.phone__speech { top: var(--sy, 70%); }
+.phone__logo { position: absolute; top: 15%; left: 50%; transform: translateX(-50%); z-index: 2; font-weight: 900; font-size: 0.7rem; letter-spacing: .1em; padding: 3px 10px; background: rgba(255, 255, 255, .85); color: var(--ink); border-radius: 6px; }
+
+.reel-row { grid-template-areas: "label seg custom"; }
+.reel-row__label { grid-area: label; }
+.reel-row .seg { grid-area: seg; }
+.reel-row__custom { grid-area: custom; }
+@media (max-width: 620px) {
+  .reel-row { grid-template-columns: 1fr auto; grid-template-areas: "label custom" "seg seg"; }
 }

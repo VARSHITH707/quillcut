@@ -41,7 +41,9 @@ def run_qc(video: Path, plan: EditPlan, cfg: dict) -> list[Check]:
         decode.stderr.strip()[:300] or "clean full decode")
 
     info = media.video_info(video)
-    add("resolution", (info["width"], info["height"]) == (1080, 1920), f"{info['width']}x{info['height']}")
+    want_size = (plan.output.width, plan.output.height)
+    add("resolution", (info["width"], info["height"]) == want_size,
+        f"{info['width']}x{info['height']} (plan {want_size[0]}x{want_size[1]})")
     want, got = Fraction(plan.output.fps), Fraction(info["fps"])
     add("frame_rate", want == got and not info["vfr"], f"{got} (plan {want})")
     tol = cfg["qc"]["duration_tolerance"]

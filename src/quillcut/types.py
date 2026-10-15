@@ -32,6 +32,8 @@ class Segment(BaseModel):
     audio_gain: float = 1.0
     hold_after: float = 0.0                   # deliberate end-frame hold, last segment only
     push_in: float = 0.0                      # zoom growth over the segment, e.g. 0.06
+    zoom: float = 1.0                         # static punch-in factor (1.0 = none), centred on the crop
+    crop_x: float | None = None               # normalised x (0-1) of the person to keep in a vertical crop
     video_source: str | None = None           # b-roll: picture from here, audio stays from `source`
     video_in: float | None = None
     rationale: str = ""
@@ -48,6 +50,8 @@ class Segment(BaseModel):
             raise ValueError(f"{self.id}: speed {self.speed} outside 0.5–2.0")
         if self.layout == "split" and (self.second_source is None or self.second_in is None):
             raise ValueError(f"{self.id}: split layout needs second_source and second_in")
+        if not 1.0 <= self.zoom <= 1.35:
+            raise ValueError(f"{self.id}: zoom {self.zoom} outside 1.0-1.35")
         if not 0 <= self.hold_after <= MAX_HOLD_SECONDS:
             raise ValueError(f"{self.id}: hold over {MAX_HOLD_SECONDS}s is padding")
         return self
@@ -57,10 +61,13 @@ class Word(BaseModel):
     text: str
     start: float
     end: float
+    emphasis: bool = False                    # key term: drawn in the accent colour, slightly larger
 
 
 class TextCard(BaseModel):
-    kind: Literal["hook", "label", "speech"]
+    # hook = opening title, label = plain text, speech = word-timed captions, lower_third = speaker/context bar,
+    # callout = key-phrase pill, cta = closing line
+    kind: Literal["hook", "label", "speech", "lower_third", "callout", "cta"]
     text: str
     start: float
     end: float
@@ -92,6 +99,7 @@ class AudioPlan(BaseModel):
     target_lufs: float = -14.0
     true_peak_max: float = -1.0
     fade_out: float = 0.0
+    denoise: bool = False        # gentle broadband noise reduction on the dialogue
     music: MusicBed | None = None
     sfx: list[SfxHit] = Field(default_factory=list)
 

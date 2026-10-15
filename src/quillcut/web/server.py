@@ -25,10 +25,11 @@ from urllib.parse import parse_qs, unquote, urlparse
 import httpx
 
 from .. import jobs as pipeline_jobs
+from .. import reelplan
 from ..config import load_config, load_yaml
 from ..formats import list_formats
 from ..paths import CLIPPING, FORMATS
-from . import copywriter
+from . import copywriter, reels_job
 
 log = logging.getLogger("quillcut.web")
 
@@ -38,6 +39,7 @@ UPLOADS = WEB_ROOT / "uploads"
 JOBS = WEB_ROOT / "jobs"
 
 VIDEO_EXT = {".mp4", ".mov", ".mkv", ".webm", ".m4v", ".avi"}
+IMAGE_EXT = {".png", ".jpg", ".jpeg", ".webp"}
 RIGHTS = {"own_footage": "I own this footage", "client_owned": "My client owns it and I have permission",
           "client_licensed": "It is licensed to me for this use", "cc_verified": "It is Creative Commons and I verified the licence"}
 MAX_UPLOAD = int(float(os.environ.get("QUILLCUT_MAX_UPLOAD_GB", "10")) * 1024 ** 3)
@@ -157,6 +159,35 @@ def build_clips(job_id: str, results: list[dict], cfg: dict) -> list[dict]:
 
 
 def run_job(job_id: str) -> None:
+    """Dispatch by kind: 'analyze' and 'reels' use the conversation engine; 'auto' is the original peak mode."""
+    s = store()
+    job = s.get(job_id) or {}
+    kind = job.get("kind", "auto")
+    if kind == "auto":
+        return run_auto_job(job_id)
+    job = s.update(job_id, status="running", stage="starting", started=time.time())
+
+    def update(**fields) -> dict:
+        return s.update(job_id, **fields)
+
+    try:
+        if kind == "analyze":
+            reels_job.run_analysis(job, update)
+        else:
+            logo_id = job["options"].get("logo_upload")
+            logo = next(iter((UPLOADS / logo_id).iterdir()), None) if logo_id and ID_RE.match(logo_id) \
+                and (UPLOADS / logo_id).is_dir() else None
+            reels_job.run_reels(job, update, JOBS / job_id / "reels", logo)
+        s.update(job_id, finished=time.time())
+    except pipeline_jobs.SourceRejected as exc:
+        s.update(job_id, status="failed", error=str(exc), finished=time.time())
+    except Exception:  # noqa: BLE001 - the page needs a message, the log keeps the trace
+        log.exception("job %s failed", job_id)
+        s.update(job_id, status="failed", finished=time.time(),
+                 error="Something went wrong while making the reels. Check the terminal for details.")
+
+
+def run_auto_job(job_id: str) -> None:
     s = store()
     job = s.update(job_id, status="running", stage="starting", started=time.time())
     opts = job["options"]
@@ -234,8 +265,9 @@ def ollama_state() -> dict:
 
 
 def job_view(job: dict) -> dict:
-    view = {k: job.get(k) for k in ("id", "filename", "status", "stage", "done", "total", "error", "note",
-                                      "created", "started", "finished", "options")}
+    view = {k: job.get(k) for k in ("id", "kind", "filename", "status", "stage", "done", "total", "error", "note",
+                                      "created", "started", "finished", "options", "analysis", "capacity",
+                                      "speakers", "messages")}
     clips = []
     for c in job.get("clips", []):
         c = dict(c)
@@ -364,7 +396,12 @@ class Handler(BaseHTTPRequestHandler):
         if method == "GET" and path == "/api/status":
             return self._json({"ollama": ollama_state(), "formats": format_list(), "presets": presets(),
                                "rights": RIGHTS, "max_upload_gb": round(MAX_UPLOAD / 1024 ** 3, 1),
-                               "extensions": sorted(VIDEO_EXT)})
+                               "extensions": sorted(VIDEO_EXT),
+                               "reels": {"presets": reels_job.DURATION_PRESETS, "min": reels_job.MIN_TARGET,
+                                         "max": reels_job.MAX_TARGET, "max_reels": reels_job.MAX_REELS,
+                                         "intensity": list(reelplan.INTENSITY), "aspects": list(reelplan.ASPECTS),
+                                         "content_styles": list(reels_job.CONTENT_STYLES),
+                                         "music_available": bool(reels_job.music_tracks())}})
         if method == "POST" and path == "/api/upload":
             return self._upload(query)
         if method == "POST" and path == "/api/jobs":
@@ -386,23 +423,27 @@ class Handler(BaseHTTPRequestHandler):
                 return self._zip(job)
             if method == "GET":
                 return self._json(job_view(job))
-        m = re.fullmatch(r"/media/([0-9a-f]{12})/(c_\d{2}\.mp4)", path)
+        m = re.fullmatch(r"/media/([0-9a-f]{12})/([a-z]_\d{2}\.mp4)", path)
         if m and method == "GET":
             return self._media(m.group(1), m.group(2), "download" in query)
         raise ApiError(404, "Not found.")
 
     def _upload(self, query: dict) -> None:
         name = safe_name((query.get("name") or [""])[0])
-        if Path(name).suffix.lower() not in VIDEO_EXT:
-            raise ApiError(415, f"Use one of: {', '.join(sorted(VIDEO_EXT))}")
+        is_logo = (query.get("kind") or [""])[0] == "logo"
+        allowed = IMAGE_EXT if is_logo else VIDEO_EXT
+        if Path(name).suffix.lower() not in allowed:
+            raise ApiError(415, f"Use one of: {', '.join(sorted(allowed))}")
         try:
             length = int(self.headers.get("Content-Length") or "")
         except ValueError:
             raise ApiError(411, "The upload size is missing.") from None
         if length <= 0:
             raise ApiError(400, "That file is empty.")
-        if length > MAX_UPLOAD:
-            raise ApiError(413, f"That file is larger than {MAX_UPLOAD / 1024 ** 3:.0f} GB.")
+        limit = 10 * 1024 ** 2 if is_logo else MAX_UPLOAD
+        if length > limit:
+            raise ApiError(413, f"That file is larger than {limit / 1024 ** 3:.0f} GB." if not is_logo
+                           else "A logo must be smaller than 10 MB.")
         upload_id = uuid.uuid4().hex[:12]
         folder = UPLOADS / upload_id
         folder.mkdir(parents=True)
@@ -417,6 +458,14 @@ class Handler(BaseHTTPRequestHandler):
                         raise ApiError(400, "The upload was interrupted.")
                     fh.write(chunk)
                     remaining -= len(chunk)
+            if is_logo:
+                from PIL import Image
+                try:
+                    with Image.open(target) as im:
+                        im.verify()
+                except Exception:  # noqa: BLE001
+                    raise ApiError(422, "That file doesn't look like an image we can read.") from None
+                return self._json({"upload_id": upload_id, "name": name, "size": length, "kind": "logo"}, 201)
             from .. import media
             try:
                 info = media.video_info(target)
@@ -440,11 +489,28 @@ class Handler(BaseHTTPRequestHandler):
         files = [p for p in (UPLOADS / upload_id).iterdir() if p.suffix.lower() in VIDEO_EXT]
         if not files:
             raise ApiError(400, "Upload a video first.")
-        options = validate_options(body, {p["key"]: p for p in presets()})
+        kind = body.get("kind") or ("reels" if "reels" in body else "auto")
+        if kind not in ("auto", "analyze", "reels"):
+            raise ApiError(400, "Unknown job type.")
+        if kind == "analyze":
+            options = {}
+        else:
+            check = {**body, "max_clips": 1} if kind == "reels" else body
+            options = validate_options(check, {p["key"]: p for p in presets()})
+            if kind == "reels":
+                try:
+                    extra = reels_job.validate(body)
+                except ValueError as exc:
+                    raise ApiError(400, str(exc)) from None
+                logo_id = extra.get("logo_upload")
+                if logo_id is not None and (not isinstance(logo_id, str) or not ID_RE.match(logo_id)
+                                            or not (UPLOADS / logo_id).is_dir()):
+                    raise ApiError(400, "Upload the logo again.")
+                options = {**options, **extra, "max_clips": len(extra["targets"])}
         job_id = uuid.uuid4().hex[:12]
-        job = {"id": job_id, "filename": files[0].name, "source": str(files[0]), "status": "queued",
-               "stage": "queued", "done": 0, "total": options["max_clips"], "options": options, "clips": [],
-               "created": time.time()}
+        job = {"id": job_id, "kind": kind, "filename": files[0].name, "source": str(files[0]), "status": "queued",
+               "stage": "queued", "done": 0, "total": options.get("max_clips", 0), "options": options,
+               "clips": [], "created": time.time()}
         store().add(job)
         store().queue.put(job_id)
         self._json(job_view(job), 201)

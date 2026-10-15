@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Quillcut Studio</title>
-  <meta name="description" content="Drop one long video and get captioned vertical reels with captions and hashtags, made on your own computer.">
+  <meta name="description" content="Drop one long video and get complete, captioned, professionally edited reels with captions and hashtags, made on your own computer.">
   <link rel="icon" href="/assets/favicon.png">
   <link rel="stylesheet" href="/styles.css">
 </head>
@@ -29,14 +29,14 @@
   <main id="top">
     <section class="hero" aria-labelledby="title">
       <span class="sticker" aria-hidden="true">Free · Local · Open source</span>
-      <h1 id="title">Drop one long video. Get <em>reels</em> ready to post.</h1>
-      <p class="lede">Captions, hashtags and clean vertical edits, made on your own computer. Nothing is uploaded anywhere.</p>
+      <h1 id="title">One long video. Complete <em>reels</em>, never cut mid-thought.</h1>
+      <p class="lede">Quillcut reads the whole conversation first, then clips complete answers, edits them, and writes the captions. Everything runs on your own computer.</p>
     </section>
 
     <section class="workspace" id="create" aria-label="Make reels">
       <div class="steps">
 
-        <!-- 1 · video -->
+        <!-- 1 · video + analysis -->
         <article class="card tab" aria-labelledby="s1">
           <span class="tab__label" aria-hidden="true">1</span>
           <h2 id="s1">Your video</h2>
@@ -44,7 +44,7 @@
             <input type="file" id="file" accept="video/*,.mkv" hidden>
             <svg class="drop__icon" viewBox="0 0 48 48" aria-hidden="true"><path d="M24 33V11m0 0L14 21m10-10 10 10M8 37h32" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
             <p class="drop__title">Drag and drop your video here</p>
-            <p class="drop__hint" id="drop-hint">or press to choose a file · MP4, MOV, MKV, WEBM · at least 20 seconds, 720p or higher works best</p>
+            <p class="drop__hint" id="drop-hint">or press to choose a file · MP4, MOV, MKV, WEBM · at least 20 seconds, 720p or higher works best · interviews, podcasts, lessons and talks work best</p>
             <button type="button" class="pill" id="pick">Upload video <span class="pill__arrow" aria-hidden="true">→</span></button>
           </div>
           <div class="file" id="file-chip" hidden>
@@ -60,32 +60,118 @@
             </div>
           </div>
           <p class="error" id="upload-error" role="alert" hidden></p>
+
+          <div class="analysis" id="analysis" hidden aria-live="polite">
+            <p class="analysis__state" id="analysis-state">Reading the whole conversation…</p>
+            <div class="bar" id="analysis-bar"><i id="analysis-fill"></i></div>
+            <div id="analysis-result" hidden>
+              <p class="analysis__headline" id="analysis-headline"></p>
+              <ul class="moments" id="moments"></ul>
+            </div>
+          </div>
         </article>
 
-        <!-- 2 · look -->
+        <!-- 2 · reels and durations -->
         <article class="card tab" aria-labelledby="s2">
           <span class="tab__label" aria-hidden="true">2</span>
-          <h2 id="s2">Pick a look</h2>
-          <div class="formats" id="formats" role="radiogroup" aria-label="Short format"></div>
-          <div class="presets" id="presets" role="radiogroup" aria-label="Caption style"></div>
+          <h2 id="s2">How many reels, and how long?</h2>
+          <fieldset class="field">
+            <legend>Number of reels</legend>
+            <div class="seg" id="count"></div>
+          </fieldset>
+          <p class="hint" id="capacity-hint"></p>
+          <div class="reels-config" id="reels-config"></div>
+          <label class="check check--soft">
+            <input type="checkbox" id="strict">
+            <span><b>Never run longer than the target.</b> If an answer needs more time, that reel is skipped and you're told, instead of being cut off.</span>
+          </label>
+          <p class="hint">The target is a goal, not a cut-off. By default a reel runs a little longer when needed to finish the speaker's thought.</p>
         </article>
 
-        <!-- 3 · customise -->
+        <!-- 3 · look and style -->
         <article class="card tab" aria-labelledby="s3">
           <span class="tab__label" aria-hidden="true">3</span>
-          <h2 id="s3">Make it yours</h2>
+          <h2 id="s3">Pick a look</h2>
+          <div class="formats" id="formats" role="radiogroup" aria-label="Short format"></div>
+          <div class="presets" id="presets" role="radiogroup" aria-label="Caption style"></div>
+          <div class="field-row">
+            <div class="field">
+              <label for="content-style">Content style</label>
+              <select id="content-style">
+                <option value="auto">Auto-detect</option>
+                <option value="interview">Interview</option>
+                <option value="podcast">Podcast</option>
+                <option value="educational">Educational</option>
+                <option value="storytelling">Storytelling</option>
+                <option value="motivational">Motivational</option>
+                <option value="debate">Debate</option>
+                <option value="business">Business</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="include-question">Include the interviewer's question</label>
+              <select id="include-question">
+                <option value="auto">Auto (when it is short)</option>
+                <option value="yes">Always</option>
+                <option value="no">Never</option>
+              </select>
+            </div>
+          </div>
+          <fieldset class="field">
+            <legend>Editing intensity</legend>
+            <div class="seg" id="intensity">
+              <label><input type="radio" name="intensity" value="clean"><span>Clean</span></label>
+              <label><input type="radio" name="intensity" value="dynamic" checked><span>Dynamic</span></label>
+              <label><input type="radio" name="intensity" value="high_energy"><span>High energy</span></label>
+            </div>
+            <p class="hint" id="intensity-hint"></p>
+          </fieldset>
+          <fieldset class="field">
+            <legend>Shape</legend>
+            <div class="seg" id="aspect">
+              <label><input type="radio" name="aspect" value="9:16" checked><span>9:16 vertical</span></label>
+              <label><input type="radio" name="aspect" value="1:1"><span>1:1 square</span></label>
+              <label><input type="radio" name="aspect" value="16:9"><span>16:9 wide</span></label>
+            </div>
+          </fieldset>
+        </article>
+
+        <!-- 4 · customise -->
+        <article class="card tab" aria-labelledby="s4">
+          <span class="tab__label" aria-hidden="true">4</span>
+          <h2 id="s4">Make it yours</h2>
           <div class="field">
             <label for="size">Caption size <output id="size-out">78</output></label>
             <input type="range" id="size" min="48" max="120" step="2" value="78">
+          </div>
+          <div class="field">
+            <label for="caption-y">Caption position <output id="y-out">70%</output></label>
+            <input type="range" id="caption-y" min="50" max="76" step="1" value="70">
           </div>
           <div class="colors">
             <label class="swatch"><input type="color" id="c-base" value="#ffffff"><span>Text</span></label>
             <label class="swatch"><input type="color" id="c-active" value="#ffd400"><span>Highlight word</span></label>
             <label class="swatch"><input type="color" id="c-stroke" value="#000000"><span>Outline</span></label>
+            <label class="swatch"><input type="color" id="c-accent" value="#f85830"><span>Brand color</span></label>
+          </div>
+          <div class="field-row">
+            <div class="field">
+              <label for="logo">Logo (optional)</label>
+              <input type="file" id="logo" accept="image/png,image/jpeg,image/webp">
+              <p class="hint" id="logo-state"></p>
+            </div>
+            <div class="field">
+              <label for="cta">Closing line (optional)</label>
+              <input type="text" id="cta" maxlength="60" placeholder="Follow for more">
+            </div>
           </div>
           <fieldset class="field">
-            <legend>How many reels?</legend>
-            <div class="seg" id="count"></div>
+            <legend>Background music</legend>
+            <div class="seg" id="music">
+              <label><input type="radio" name="music" value="none" checked><span>None</span></label>
+              <label><input type="radio" name="music" value="subtle"><span>Subtle, under speech</span></label>
+            </div>
+            <p class="hint" id="music-hint"></p>
           </fieldset>
           <fieldset class="field">
             <legend>Quality</legend>
@@ -96,10 +182,10 @@
           </fieldset>
         </article>
 
-        <!-- 4 · rights + go -->
-        <article class="card tab card--go" aria-labelledby="s4">
-          <span class="tab__label" aria-hidden="true">4</span>
-          <h2 id="s4">Confirm and make</h2>
+        <!-- 5 · rights + go -->
+        <article class="card tab card--go" aria-labelledby="s5">
+          <span class="tab__label" aria-hidden="true">5</span>
+          <h2 id="s5">Confirm and make</h2>
           <div class="field">
             <label for="rights">Where did this video come from?</label>
             <select id="rights"></select>
@@ -119,6 +205,7 @@
         <div class="phone" id="phone">
           <div class="phone__hook" id="pv-hook">the play nobody saw coming</div>
           <div class="phone__speech" id="pv-speech"><span>this is how</span> <span class="on">it ends</span></div>
+          <div class="phone__logo" id="pv-logo" hidden>LOGO</div>
         </div>
         <p class="hint">Captions will look like this on your reels.</p>
       </aside>
@@ -127,9 +214,10 @@
     <!-- progress -->
     <section class="progress card" id="progress" aria-live="polite" hidden>
       <h2 id="progress-title">Making your reels…</h2>
+      <ol class="stages" id="stages"></ol>
       <p id="progress-stage">Starting</p>
       <div class="bar bar--big"><i id="job-fill"></i></div>
-      <p class="hint">This can take a few minutes for long videos. You can keep this page open.</p>
+      <p class="hint">Long videos take a few minutes. You can keep this page open.</p>
     </section>
 
     <!-- results -->
@@ -138,8 +226,9 @@
         <h2 id="results-title">Your reels</h2>
         <a class="pill pill--ghost" id="zip" href="#" hidden>Download all (.zip)</a>
       </div>
-      <p class="empty" id="results-empty">Your finished reels will show up here, with a caption and hashtags for each one.</p>
+      <p class="empty" id="results-empty">Your finished reels will show up here, with the hook, source times, caption and hashtags for each.</p>
       <p class="note" id="results-note" hidden></p>
+      <ul class="messages" id="results-messages"></ul>
       <div class="grid" id="grid"></div>
     </section>
 

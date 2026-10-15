@@ -286,3 +286,115 @@ def test_merge_style_never_mutates_and_clamps_min_size():
     assert base["colors"]["active"] == "FFD400" and base["speech"]["size"] == 78
     assert merged["colors"] == {"base": "FFFFFF", "active": "00FF00"}
     assert merged["speech"]["size"] == 50 and merged["speech"]["min_size"] == 50
+
+
+# --- conversation reels: analysis, per-reel durations, regeneration --------------------------------------------
+
+from quillcut import conversation_job  # noqa: E402
+
+REELS = {"kind": "reels", "preset": "gaming_bold", "colors": {"base": "FFFFFF", "active": "FFD400", "stroke": "000000"},
+         "caption_size": 78, "quality": "draft", "rights": "own_footage", "rights_confirmed": True,
+         "reels": [{"target": 35}, {"target": 60}], "intensity": "dynamic", "aspect": "9:16"}
+
+
+def _fake_run(tmp_path: Path, seen: dict):
+    def fake(video, *, rights, targets, publish_dir, on_progress=None, exclude=None, prefer=None, profile=None,
+             strict=False, include_question="auto", options=None, **kw):
+        seen.update(targets=targets, exclude=exclude, prefer=prefer, profile=profile, strict=strict,
+                    include_question=include_question, options=options)
+        on_progress("rendering", 0, len(targets))
+        publish_dir.mkdir(parents=True, exist_ok=True)
+        results = []
+        for k, t in enumerate(targets, start=1):
+            if k == 2:
+                results.append({"reel": k, "target": t, "rejected": "No further complete, distinct moment is long enough."})
+                continue
+            f = publish_dir / f"r_{k:02d}.mp4"
+            f.write_bytes(b"\x00\x00\x00\x18ftypmp42" + bytes(range(256)) * 20)
+            results.append({"reel": k, "clip_id": f"r_{k:02d}", "target": t, "actual": 42.0, "extended": True,
+                            "note": "Extended from 35s to 42s to finish the thought.", "source_start": 10.0,
+                            "source_end": 52.0, "question_included": True, "partial": False,
+                            "hook": {"kind": "question", "text": "What do you do?"}, "topic": "", "scores": {},
+                            "score": 0.9, "reasons": [], "intensity": "dynamic", "aspect": "9:16", "notes": [],
+                            "qc": "PASS", "failures": [], "warnings": [], "final": str(tmp_path / "p" / "final" / "r.mp4"),
+                            "published": str(f), "duration": 42.0,
+                            "validation": [{"name": "speech_matches_plan", "status": "PASS", "message": "100%"}]})
+        return {"results": results, "capacity": 1, "sentences": 20, "speakers": ["A", "B"]}
+    return fake
+
+
+def test_analyze_job_reports_what_the_video_supports(app, monkeypatch):
+    port, _ = app
+    monkeypatch.setattr(conversation_job, "analyse_only", lambda video, **k: {
+        "duration": 130.0, "capacity": 3, "moments": [], "questions": 3, "speakers": ["A", "B"], "units": 3,
+        "sentences": 27, "min_seconds": 12.0})
+    up = as_json(upload(port)[2])
+    status, _, data = call(port, "POST", "/api/jobs", {"kind": "analyze", "upload_id": up["upload_id"]})
+    assert status == 201
+    job = wait_for(port, as_json(data)["id"])
+    assert job["status"] == "done" and job["analysis"]["capacity"] == 3 and job["kind"] == "analyze"
+
+
+@pytest.mark.parametrize("patch,message", [
+    ({"reels": []}, "between 1 and 20"),
+    ({"reels": [{"target": 5}]}, "between 15 and 180"),
+    ({"reels": [{"target": "soon"}]}, "number of seconds"),
+    ({"reels": [{"target": 40}] * 21}, "between 1 and 20"),
+    ({"intensity": "wild"}, "intensity"),
+    ({"aspect": "4:3"}, "Aspect"),
+    ({"include_question": "maybe"}, "Question setting"),
+    ({"accent": "orange"}, "hex color"),
+    ({"caption_y": 0.2}, "safe area"),
+    ({"music": "loud"}, "Music"),
+    ({"prefer": [5, 2]}, "Preferred range"),
+])
+def test_reels_job_options_are_validated(app, patch, message):
+    port, _ = app
+    up = as_json(upload(port)[2])
+    status, _, data = call(port, "POST", "/api/jobs", {**REELS, **patch, "upload_id": up["upload_id"]})
+    assert status == 400 and message in as_json(data)["error"], data
+
+
+def test_reels_job_makes_clips_with_target_actual_and_note(app, monkeypatch):
+    port, tmp = app
+    seen: dict = {}
+    monkeypatch.setattr(conversation_job, "run", _fake_run(tmp, seen))
+    up = as_json(upload(port)[2])
+    status, _, data = call(port, "POST", "/api/jobs", {**REELS, "upload_id": up["upload_id"], "strict": True,
+                                                       "content_style": "interview", "include_question": "yes"})
+    assert status == 201
+    job = wait_for(port, as_json(data)["id"])
+    assert job["status"] == "done", job
+    assert seen["targets"] == [35.0, 60.0] and seen["strict"] is True and seen["profile"] == "interview"
+    good, missing = job["clips"][0], job["clips"][1]
+    assert good["target"] == 35 and good["actual"] == 42.0 and good["extended"] is True
+    assert good["hook"]["kind"] == "question" and good["caption"] and good["url"].endswith("r_01.mp4")
+    assert good["validation"][0]["status"] == "PASS"
+    assert "rejected" in missing and "file" not in missing
+    assert "Made 1 of 2" in job["note"]
+    status, headers, body = call(port, "GET", good["url"])
+    assert status == 200 and headers["Content-Type"] == "video/mp4"
+
+
+def test_regeneration_passes_exclude_and_prefer_ranges(app, monkeypatch):
+    port, tmp = app
+    seen: dict = {}
+    monkeypatch.setattr(conversation_job, "run", _fake_run(tmp, seen))
+    up = as_json(upload(port)[2])
+    body = {**REELS, "reels": [{"target": 45}], "upload_id": up["upload_id"], "exclude": [[10, 52]],
+            "prefer": [60, 100]}
+    job = wait_for(port, as_json(call(port, "POST", "/api/jobs", body)[2])["id"])
+    assert job["status"] == "done"
+    assert seen["exclude"] == [(10.0, 52.0)] and seen["prefer"] == (60.0, 100.0)
+
+
+def test_logo_upload_accepts_images_only(app):
+    port, _ = app
+    from PIL import Image
+    import io as _io
+    buf = _io.BytesIO()
+    Image.new("RGBA", (40, 40), (248, 88, 48, 255)).save(buf, "PNG")
+    status, _, data = call(port, "POST", "/api/upload?kind=logo&name=brand.png", buf.getvalue())
+    assert status == 201 and as_json(data)["kind"] == "logo"
+    assert call(port, "POST", "/api/upload?kind=logo&name=brand.exe", b"MZ" * 50)[0] == 415
+    assert call(port, "POST", "/api/upload?kind=logo&name=fake.png", b"not an image at all" * 20)[0] == 422

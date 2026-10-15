@@ -14,7 +14,9 @@ from . import media
 from .captions import build_ass
 from .types import EditPlan, Segment, SourceRef
 
-OUT_W, OUT_H = 1080, 1920
+from .reframe import crop_x_pixels
+
+OUT_W, OUT_H = 1080, 1920      # default canvas; a plan's OutputSpec overrides it per render
 
 
 def _crop_box(ref: SourceRef) -> str:
@@ -22,22 +24,34 @@ def _crop_box(ref: SourceRef) -> str:
     return f"crop={w}:{h}:{x}:{y}"
 
 
-def _layout_chain(layout: str, label_in: str, label_out: str) -> str:
+def _layout_chain(layout: str, label_in: str, label_out: str, w: int = OUT_W, h: int = OUT_H,
+                  box: tuple[int, int] | None = None, crop_x: float | None = None) -> str:
+    """Filter chain that turns the content box into a w x h frame. `box` is the content size in pixels."""
+    aspect = w / h
     if layout == "center_crop":
-        return (f"[{label_in}]crop='if(gte(iw/ih,9/16),trunc(ih*9/16/2)*2,iw)':"
-                f"'if(gte(iw/ih,9/16),ih,trunc(iw*16/9/2)*2)',"
-                f"scale={OUT_W}:{OUT_H}:flags=lanczos[{label_out}]")
+        if box is None:
+            return (f"[{label_in}]crop='if(gte(iw/ih,{aspect:.6f}),trunc(ih*{aspect:.6f}/2)*2,iw)':"
+                    f"'if(gte(iw/ih,{aspect:.6f}),ih,trunc(iw/{aspect:.6f}/2)*2)',"
+                    f"scale={w}:{h}:flags=lanczos[{label_out}]")
+        cw, ch, x = crop_x_pixels(box[0], box[1], aspect, crop_x)
+        y = (box[1] - ch) // 2 // 2 * 2
+        return f"[{label_in}]crop={cw}:{ch}:{x}:{y},scale={w}:{h}:flags=lanczos[{label_out}]"
     if layout == "wide_fill":
+        if box is not None and box[0] / box[1] >= 0.8:
+            cw, ch, x = crop_x_pixels(box[0], box[1], 0.8, crop_x)
+            fg_crop = f"crop={cw}:{ch}:{x}:0"
+        else:
+            fg_crop = "crop='min(iw,trunc(ih*4/5/2)*2)':ih"
         return (f"[{label_in}]split=2[bg0][fg0];"
-                f"[bg0]scale={OUT_W}:{OUT_H}:force_original_aspect_ratio=increase,crop={OUT_W}:{OUT_H},"
+                f"[bg0]scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},"
                 f"boxblur=24:2,eq=brightness=-0.18[bg];"
-                f"[fg0]crop='min(iw,trunc(ih*4/5/2)*2)':ih,scale={OUT_W}:-2:flags=lanczos[fg];"
+                f"[fg0]{fg_crop},scale={w}:-2:flags=lanczos[fg];"
                 f"[bg][fg]overlay=(W-w)/2:(H-h)/2[{label_out}]")
     if layout == "fit_blur":
         return (f"[{label_in}]split=2[bg0][fg0];"
-                f"[bg0]scale={OUT_W}:{OUT_H}:force_original_aspect_ratio=increase,crop={OUT_W}:{OUT_H},"
+                f"[bg0]scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},"
                 f"boxblur=30:2,eq=brightness=-0.22[bg];"
-                f"[fg0]scale={OUT_W}:-2:flags=lanczos[fg];"
+                f"[fg0]scale={w}:-2:flags=lanczos[fg];"
                 f"[bg][fg]overlay=(W-w)/2:(H-h)/2[{label_out}]")
     raise ValueError(layout)
 
@@ -51,6 +65,7 @@ def segment_command(seg: Segment, plan: EditPlan, out: Path) -> list[str]:
     src = plan.sources[seg.source]
     span = seg.src_out - seg.src_in
     vsrc = plan.sources[seg.video_source] if seg.video_source else src
+    out_w, out_h = plan.output.width, plan.output.height
     v_in = seg.video_in if seg.video_source else seg.src_in
     cmd = ["ffmpeg", "-y", "-v", "error", "-ss", f"{v_in:.3f}", "-t", f"{span:.3f}", "-i", vsrc.path]
     inputs = 1
@@ -74,13 +89,18 @@ def segment_command(seg: Segment, plan: EditPlan, out: Path) -> list[str]:
         parts.append(f"[1:v]{_crop_box(plan.sources[seg.second_source])},{speed}[v1]")
         parts += [_half("v0", "top"), _half("v1", "bot"), "[top][bot]vstack=inputs=2[lay]"]
     else:
-        parts.append(_layout_chain(seg.layout, "v0", "lay"))
+        box = (vsrc.content_box[0], vsrc.content_box[1])
+        parts.append(_layout_chain(seg.layout, "v0", "lay", out_w, out_h, box, seg.crop_x))
     chain = "lay"
+    if seg.zoom > 1.0:
+        zw, zh = int(out_w * seg.zoom) // 2 * 2, int(out_h * seg.zoom) // 2 * 2
+        parts.append(f"[{chain}]scale={zw}:{zh}:flags=lanczos,crop={out_w}:{out_h}[zm]")
+        chain = "zm"
     if seg.push_in:
         dur = seg.out_duration
-        parts.append(f"[lay]scale=w='trunc({OUT_W}*(1+{seg.push_in}*t/{dur:.3f})/2)*2':"
-                     f"h='trunc({OUT_H}*(1+{seg.push_in}*t/{dur:.3f})/2)*2':eval=frame,"
-                     f"crop={OUT_W}:{OUT_H}[pz]")
+        parts.append(f"[{chain}]scale=w='trunc({out_w}*(1+{seg.push_in}*t/{dur:.3f})/2)*2':"
+                     f"h='trunc({out_h}*(1+{seg.push_in}*t/{dur:.3f})/2)*2':eval=frame,"
+                     f"crop={out_w}:{out_h}[pz]")
         chain = "pz"
     hold = f",tpad=stop_mode=clone:stop_duration={seg.hold_after:.3f}" if seg.hold_after else ""
     parts.append(f"[{chain}]{tail}{hold}[vout]")
@@ -162,7 +182,11 @@ def _mix_bed(plan: EditPlan, work: Path, concat: list[str]) -> list[str]:
     return ["-i", "mix.wav"]
 
 
-def _master_audio(concat: list[str], work: Path, target: float, tp_max: float, fade: str) -> Path:
+DENOISE = "afftdn=nr=10:nf=-42,"      # applied once on the whole mix, never per cut (it would pump at joins)
+
+
+def _master_audio(concat: list[str], work: Path, target: float, tp_max: float, fade: str,
+                  denoise: bool = False) -> Path:
     """Gain → peak limiter → AAC → measure the *encoded* audio → correct.
 
     loudnorm's linear mode cannot raise loud-peaked game audio to target without breaking true
@@ -175,7 +199,7 @@ def _master_audio(concat: list[str], work: Path, target: float, tp_max: float, f
     wav, aac = work / "master.wav", work / "master.m4a"
     for _ in range(TRUE_PEAK_STEPS):
         for _ in range(LOUDNESS_STEPS):
-            af = (f"volume={gain:.2f}dB,alimiter=limit={10 ** (limit_db / 20):.4f}"
+            af = ((DENOISE if denoise else "") + f"volume={gain:.2f}dB,alimiter=limit={10 ** (limit_db / 20):.4f}"
                   f":attack=2:release=60:level=0{fade}")
             media.run(["ffmpeg", "-y", "-v", "error", *concat, "-vn", "-af", af, "-ar", "48000", "-ac", "2",
                        "-c:a", "pcm_s16le", wav.name], cwd=work)
@@ -219,7 +243,8 @@ def render_plan(plan: EditPlan, out_path: Path, work: Path, *, preset: str = "sl
         vf.append(f"fade=t=out:st={dur - f:.3f}:d={f:.3f}")
         fade = f",afade=t=out:st={dur - f:.3f}:d={f:.3f}"
     mixed = _mix_bed(plan, work, concat)
-    master = _master_audio(mixed, work, plan.audio.target_lufs, plan.audio.true_peak_max, fade)
+    master = _master_audio(mixed, work, plan.audio.target_lufs, plan.audio.true_peak_max, fade,
+                           denoise=plan.audio.denoise)
     tmp_out = work / "final.mp4"
     logo_input, video_filter, video_map = [], ["-vf", ",".join(vf)], "0:v"
     if plan.logo:                    # persistent brand logo, composited over captions for the whole video

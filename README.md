@@ -4,32 +4,34 @@
 
 # Quillcut Studio
 
-Drop one long video into the browser, pick a caption style, and get vertical reels with captions and
-hashtags ready to download. Everything runs on your own computer. Nothing is uploaded anywhere.
+Drop in one long video of people talking. Quillcut reads the **whole conversation first**, picks the
+moments that are complete (a question and its full answer, a finished story, a finished explanation),
+edits each one properly, and gives you reels with a caption and hashtags, ready to download.
 
-## The app in one picture
+Everything runs on your own computer. Nothing is uploaded anywhere.
+
+## What it does differently
+
+| Problem with typical clippers | What Quillcut does |
+|---|---|
+| Cuts at a timestamp, mid-answer | Never starts or ends mid-sentence. Reels end where the thought ends. |
+| Fixed length for every clip | Each reel has its own target (30, 35, 60, 90… or any value). The target is a goal: a reel runs longer when the answer needs it, and tells you so. |
+| Ignores who is speaking | Separates the interviewer from the guest and keeps the question with its answer. |
+| Subtitles and nothing else | Speaker-following framing, punch-ins, an animated title, key-term emphasis, key-phrase callouts, a lower-third and loudness-matched audio. |
+| Makes filler to hit the count | If the video only supports 3 distinct complete moments and you ask for 5, you get 3 and an explanation. |
 
 ```mermaid
 flowchart LR
-    A["1. Drop your video"] --> B["2. Pick a look<br/>and set size and colors"]
-    B --> C["3. Confirm you have<br/>the rights"]
-    C --> D["Quillcut finds the best moments,<br/>cuts, captions, and checks quality"]
-    D --> E["4. Download reels<br/>with caption + hashtags"]
+    A["1. Drop your video"] --> B["2. Quillcut reads the whole<br/>conversation and reports<br/>how many complete moments exist"]
+    B --> C["3. Choose reel count and a<br/>length for each reel"]
+    C --> D["4. Pick a look and<br/>editing intensity"]
+    D --> E["5. Download reels with<br/>hook, caption, hashtags"]
 ```
 
-**Input:** one video file (MP4, MOV, MKV or WEBM, at least 20 seconds, 720p or higher works best).
-**Output:** 1080x1920 reels you can preview and download, each with a written caption and hashtags,
-plus a zip of everything.
+## Quick start (Windows 10/11)
 
-## Quick start
-
-**Works on Windows 10/11** (tested). macOS and Linux are not supported yet: the GPU lock and the
-caption fonts are Windows-specific.
-
-You need Python 3.11, [ffmpeg](https://ffmpeg.org) on your PATH, and optionally an NVIDIA GPU and
-[Ollama](https://ollama.com) for AI-written captions.
-
-### Easiest: double-click `launch.bat`
+You need Python 3.11 and [ffmpeg](https://ffmpeg.org) on your PATH. An NVIDIA GPU and
+[Ollama](https://ollama.com) are optional but recommended.
 
 ```powershell
 git clone https://github.com/VARSHITH707/quillcut.git
@@ -37,124 +39,150 @@ cd quillcut
 .\launch.bat
 ```
 
-The first run sets everything up (a few GB, several minutes) and opens the app. After that it
-starts in seconds. Keep the window open while you use the app, and close it to stop.
+The first run sets everything up (a few GB, several minutes) and opens the app at
+<http://127.0.0.1:8765>. After that it starts in seconds. Keep the window open while you use it.
 
-### Manual setup
+For AI-written captions and hashtags (optional, free, runs locally):
+
+```powershell
+ollama pull qwen2.5:7b-instruct-q4_K_M
+```
+
+<details>
+<summary>Manual setup instead of launch.bat</summary>
 
 ```powershell
 python -m venv .venv
 .venv\Scripts\Activate.ps1
-```
-
-Install PyTorch (pick one), then Quillcut:
-
-```powershell
 # NVIDIA GPU (CUDA 12.6)
 pip install torch==2.11.0 torchvision==0.26.0 --index-url https://download.pytorch.org/whl/cu126
 # or CPU only
 pip install torch==2.11.0 torchvision==0.26.0 --index-url https://download.pytorch.org/whl/cpu
-
 pip install -e ".[dev]"
-```
-
-Start the app:
-
-```powershell
 quillcut web
 ```
+</details>
 
-Your browser opens at <http://127.0.0.1:8765>. Press `Ctrl+C` in the terminal to stop it.
+## Using the app
 
-### Optional: AI-written captions
+1. **Upload** your video (MP4, MOV, MKV, WEBM; at least 20 seconds; 720p or higher works best).
+   Quillcut immediately reads the whole thing and tells you how many distinct, complete moments it
+   found, with the opening line of each.
+2. **Reels:** choose how many (1, 2, 3, 5, 10 or any number up to 20). One duration control appears per
+   reel, with presets of 30, 35, 45, 60, 75 and 90 seconds plus a custom value.
+3. **Look:** caption style, content style (interview, podcast, educational, storytelling, motivational,
+   debate, business), editing intensity, and aspect ratio.
+4. **Make it yours:** caption size and position, colours, brand colour, optional logo, closing line,
+   optional quiet background music.
+5. **Confirm** you have the rights, and make the reels.
 
-Captions and hashtags are written by a local model through Ollama. Without it, the app still works
-and uses a simple template built from the reel's transcript, and it labels each caption so you know
-which one you got.
+Each finished reel shows the **target and the actual duration**, whether it was **extended to finish the
+thought** (and by how much), the **hook line** it opens on, the **source timestamps**, the **checks it
+passed**, an editable **caption and hashtags**, and download buttons. Two buttons let you try again:
+*New length* re-cuts the same moment to a different target, and *Try another moment* picks the next-best one.
 
-```bash
-ollama pull qwen2.5:7b-instruct-q4_K_M
-```
+### Duration rules
 
-## How it works
+* The selected duration is a **target**. If the speaker is still finishing the point at the target, the
+  reel is extended to the natural end, up to a hard maximum (about 1.75× the target, at least +30 s).
+* A reel is never padded. If the thought finishes early, it ends early and says so.
+* **Strict mode** never runs past the target. If a complete answer does not fit, that reel is skipped and
+  you are told how long the answer needs, instead of cutting it off.
+* A 90-second answer that is longer than the maximum ends at a paragraph boundary and is marked as a part.
+
+## How the clipping decision is made
 
 ```mermaid
 flowchart TD
-    UI[Browser page] -->|upload| API[Local server 127.0.0.1]
-    API --> Q[Job queue]
-    Q --> P[Pipeline]
-    subgraph P[Pipeline]
-        direction TB
-        A1[Probe and analyse<br/>speech, scenes, audio peaks] --> A2[Plan moments<br/>and cut points]
-        A2 --> A3[Render 1080x1920<br/>with your caption style]
-        A3 --> A4[Quality checks<br/>loudness, framing, captions]
-    end
-    P --> W[Caption writer<br/>Ollama or template]
-    W --> UI
+    A[Transcribe every word with timestamps] --> B[Split into sentences,<br/>mark questions and unfinished thoughts]
+    B --> C[Separate voices<br/>interviewer vs guest]
+    C --> D[Group into units:<br/>question + answer, or a talk]
+    D --> E[Split units into paragraphs<br/>where the topic shifts]
+    E --> F[Build candidates from whole paragraphs<br/>hard gates: complete, self-contained]
+    F --> G[Rank: completeness, fit to target,<br/>hook, information, clarity, novelty]
+    G --> H[Pick distinct moments<br/>one per requested reel]
+    H --> I[Optional second opinion from<br/>the local language model]
 ```
 
-- The server only listens on `127.0.0.1` and refuses requests from other sites.
-- Reels that fail a quality check are not offered for download, and the page says why.
-- Your videos and reels live in the `data/` folder next to the code. Set `QUILLCUT_HOME` to move it.
+A candidate must pass these gates before it is ever ranked: it starts on a sentence start, ends on a
+finished sentence, is not continued by the next sentence, does not open on a reference like "so" or
+"that" without its question, and (for a question and answer) reaches the end of the answer unless the
+answer exceeds the maximum.
+
+## The edit
+
+* **Hook:** a verbatim line from the conversation. It is the question, the opening line, or a stronger
+  line from later in the same answer played first as a cold open. Nothing is rewritten or invented, and a
+  shortened line is marked with "…".
+* **Framing:** vertical crops follow the active speaker (face detection, with mouth movement choosing
+  between several faces). Framing changes happen on sentence boundaries.
+* **Pacing:** silences longer than 0.85 s are tightened to 0.30 s. No word is ever removed.
+* **Motion graphics:** animated title with an accent bar, a "Question" lower-third, key terms in the
+  accent colour, key-phrase callouts quoted from the speaker, and an optional progress bar and closing line.
+* **Sound:** loudness matched, peaks limited, optional noise reduction, optional music that ducks under speech.
+* **Intensity:** *clean* (title and captions), *dynamic* (framing changes and callouts), *high energy*
+  (faster changes, bigger punch-ins, progress bar).
+
+Every reel is **re-listened to after rendering**: the speech is transcribed again and compared with the
+plan, so a reel that starts or stops in the wrong place is flagged instead of silently delivered.
 
 ## Command line
 
-The same engine is available without the browser:
-
-```bash
-quillcut run match.mp4 --format gaming --rights own_footage
+```powershell
+quillcut clip interview.mp4 --targets 35,60,90 --rights own_footage --intensity dynamic
+quillcut web                                  # the app
+quillcut run match.mp4 --format gaming        # the original loudness-peak clipper
+quillcut doctor                               # check ffmpeg, GPU, fonts and models
 ```
 
-| Command | What it does |
+| `clip` option | Meaning |
 |---|---|
-| `quillcut web` | Open the drag-and-drop app |
-| `quillcut run VIDEO --format gaming --rights ...` | Automatic reels from one video |
-| `quillcut script NAME --a VIDEO [--b VIDEO]` | One reel from a named script template |
-| `quillcut reels BOOK.yaml` | Render hand-directed reels from a YAML book |
-| `quillcut creative BOOK.yaml` | Score, repair and re-render reels (needs Ollama) |
-| `quillcut explain PROJECT CLIP_ID` | Show why a reel looks the way it does |
-| `quillcut doctor` | Check ffmpeg, GPU, fonts and models |
+| `--targets 35,60,90` | One target (seconds) per reel |
+| `--strict` | Never exceed a target; report the conflict instead |
+| `--include-question auto\|yes\|no` | Keep the interviewer's question in the reel |
+| `--intensity clean\|dynamic\|high_energy` | How much editing |
+| `--aspect 9:16\|1:1\|16:9` | Output shape |
+| `--content-style interview\|podcast\|…` | Ranking bias for the kind of content |
+| `--no-llm`, `--no-verify` | Skip the model second opinion / the re-listen check |
 
-Try it with the generated sample in `demo/sample.mp4`:
+## Honest limits
 
-```bash
-quillcut run demo/sample.mp4 --format gaming --rights own_footage --fast
-```
-
-The sample is a test pattern with no real moments, so expect one reel to pass and the second
-candidate to be rejected.
+* **Windows only** today (the GPU lock and caption fonts are Windows-specific).
+* **Speaker separation** is an estimate from voice pitch and tone. It works well for two clearly
+  different voices; very similar voices may be treated as one. It does not name people.
+* **Face-following framing** is tested on synthetic detections, not on a library of real interview
+  footage. It falls back to a centred crop when no face is found.
+* **The language model is advisory.** A small local model is a noisy judge, so it can only veto a moment
+  when a separate deterministic check also says the speaker is still on the same point.
+* **Music** needs a track on disk. Run `python tools/make_music.py` to generate royalty-free beds.
+* The video must contain **speech**. Gameplay without commentary has no conversation to clip.
 
 ## Project layout
 
 ```text
 quillcut/
 ├── src/quillcut/
-│   ├── web/          # local web app: server.py, copywriter.py, static/ (HTML, CSS, JS)
-│   ├── jobs.py       # pipeline orchestration
-│   ├── render.py     # ffmpeg rendering
-│   ├── qc.py         # quality checks
-│   ├── models/       # speech and face models
-│   └── creative/     # optional scoring and repair
-├── formats/          # per-format rules, caption styles, script templates
-├── config/           # default settings
-├── tests/            # unit and end-to-end tests
-├── tools/            # helper scripts
-└── demo/             # sample input
+│   ├── conversation.py      # sentences, units, candidates, ranking, selection (pure logic)
+│   ├── speakers.py          # voice separation
+│   ├── reelplan.py          # moment -> edit plan (hook, cuts, framing, graphics)
+│   ├── reframe.py           # follow the active speaker
+│   ├── conversation_job.py  # whole pipeline + post-render verification
+│   ├── render.py, captions.py, qc.py   # rendering, motion graphics, quality checks
+│   └── web/                 # local app: server, job types, static page
+├── formats/  config/  tests/  tools/  demo/
 ```
-
-## Rights
-
-Reels are only produced when you say where the footage came from. In the app this is the
-confirmation box; on the command line it is `--rights` (`own_footage`, `client_owned`,
-`client_licensed` or `cc_verified`). Make sure you have permission before you post anything.
 
 ## Tests and security
 
-```bash
-pytest tests -q                 # about 3 minutes, renders real video
-pytest tests/unit -q            # fast checks only
-bandit -r src tools             # static security scan
+```powershell
+pytest tests/unit -q          # fast: engine, planner, server (about 30 s)
+pytest tests -q               # everything, including real-speech acceptance tests (several minutes)
+bandit -r src tools           # static security scan
 ```
+
+The acceptance tests synthesize a two-voice interview with Windows text-to-speech, run the full
+pipeline, and check the rendered files: complete answers, extended durations, voice separation, and
+honest shortfalls.
 
 ## License
 
