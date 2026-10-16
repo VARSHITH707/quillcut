@@ -72,7 +72,10 @@ def run_qc(video: Path, plan: EditPlan, cfg: dict) -> list[Check]:
         bars = bool(((top < 3) & (bottom < 3)).all() or ((left < 3) & (right < 3)).all())
     add("letterbox", not bars, "black bars on every sampled frame" if bars else "no bars")
 
-    safe = cfg["safe_area"]
+    # the platform safe area (and its like/comment rail) is a vertical-video concept; square and wide reels
+    # are laid out against a plain margin, so judge them by the same rule they were built with
+    vertical = plan.output.width < plan.output.height
+    safe = cfg["safe_area"] if vertical else {"top": 0.06, "bottom": 0.10, "left": 0.06, "right": 0.06}
     rail = safe.get("right_rail")
     bad = []
     for card in plan.text_cards:

@@ -6,6 +6,7 @@ import re
 from pathlib import Path
 
 from .. import conversation_job, reelplan
+from .. import rules as rules_mod
 from ..config import load_config, load_yaml
 from ..paths import CLIPPING
 from . import copywriter
@@ -89,10 +90,21 @@ def validate(body: dict) -> dict:
         raise OptionError("Music must be none or subtle.")
     exclude = [list(_range(r, "Excluded range")) for r in (body.get("exclude") or [])][:40]
     prefer = list(_range(body["prefer"], "Preferred range")) if body.get("prefer") else None
-    return {"targets": targets, "intensity": intensity, "aspect": aspect, "include_question": include_question,
-            "strict": bool(body.get("strict", False)), "content_style": style, "accent": accent.upper(),
-            "cta": cta, "caption_y": caption_y, "music": music, "reframe": bool(body.get("reframe", True)),
-            "exclude": exclude, "prefer": prefer, "logo_upload": body.get("logo_upload")}
+    text = body.get("rules")
+    if text is not None and not isinstance(text, str):
+        raise OptionError("Rules must be text.")
+    text = (text or "").strip()
+    if len(text) > rules_mod.MAX_RULE_CHARS:
+        raise OptionError(f"Rules can be at most {rules_mod.MAX_RULE_CHARS} characters.")
+    out = {"targets": targets, "intensity": intensity, "aspect": aspect, "include_question": include_question,
+           "strict": bool(body.get("strict", False)), "content_style": style, "accent": accent.upper(),
+           "cta": cta, "caption_y": caption_y, "music": music, "reframe": bool(body.get("reframe", True)),
+           "exclude": exclude, "prefer": prefer, "logo_upload": body.get("logo_upload"), "hook_style": None,
+           "rules": text}
+    parsed = rules_mod.parse(text)
+    out["rule_notes"] = rules_mod.apply_to_options(parsed, out)       # rules win over the page, and say so
+    out["rules_report"] = parsed.report()
+    return out
 
 
 def run_analysis(job: dict, update) -> None:
@@ -112,6 +124,7 @@ def run_reels(job: dict, update, publish_dir: Path, logo_path: Path | None) -> N
     plan_opts = reelplan.PlanOptions(
         intensity=opts["intensity"], aspect=opts["aspect"], reframe=opts["reframe"], cta=opts["cta"],
         accent=opts["accent"], logo=str(logo_path) if logo_path else None, caption_y=opts.get("caption_y"),
+        hook_style=opts.get("hook_style"),
         music={"file": tracks[0]["file"], "licence": tracks[0]["licence"], "level_db": -16.0} if tracks
         else ({"file": ""} if opts["music"] == "subtle" else None))
 
@@ -124,7 +137,7 @@ def run_reels(job: dict, update, publish_dir: Path, logo_path: Path | None) -> N
         style_overrides=overrides, options=plan_opts, strict=opts["strict"],
         include_question=opts["include_question"], fast=opts["quality"] == "draft", publish_dir=publish_dir,
         on_progress=progress, profile=profile, exclude=[tuple(r) for r in opts["exclude"]] or None,
-        prefer=tuple(opts["prefer"]) if opts["prefer"] else None)
+        prefer=tuple(opts["prefer"]) if opts["prefer"] else None, rules=rules_mod.parse(opts.get("rules")))
     update(stage="writing_captions")
     llm = cfg.get("creative", {}).get("llm", {})
     clips, notes = [], []
@@ -153,8 +166,12 @@ def run_reels(job: dict, update, publish_dir: Path, logo_path: Path | None) -> N
     elif missing:
         note = (f"Made {len(good)} of {len(clips)} reels. The video has {result['capacity']} distinct complete "
                 f"moment{'s' if result['capacity'] != 1 else ''}; the rest would have needed filler.")
+    report = opts.get("rules_report") or {}
+    messages = sorted(set(notes)) + list(opts.get("rule_notes") or [])
+    messages += [f"Not enforced automatically: {line}" for line in report.get("advisory", [])]
     update(status="done", stage="finished", clips=clips, note=note, capacity=result["capacity"],
-           speakers=result["speakers"], messages=sorted(set(notes)))
+           speakers=result["speakers"], messages=messages, rules_report=report,
+           rule_notes=opts.get("rule_notes") or [])
 
 
 def _spoken_text(project_dir: Path, start: float, end: float) -> str:

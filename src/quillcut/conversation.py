@@ -513,7 +513,7 @@ def _span_overlap(c: Candidate, rng: tuple[float, float]) -> float:
 def select(candidates: list[Candidate], sentences: list[Sentence], targets: list[float], *,
            strict: bool = False, hard_max: float | None = None, min_score: float = 0.5,
            profile: str | None = None, exclude: list[tuple[float, float]] | None = None,
-           prefer: tuple[float, float] | None = None) -> list[Selection]:
+           prefer: tuple[float, float] | None = None, allow=None) -> list[Selection]:
     """One selection per requested reel (its own target). Distinct, complete, honest about shortfalls.
 
     exclude: source time ranges already used (or rejected by the user); a candidate overlapping one is skipped.
@@ -528,6 +528,13 @@ def select(candidates: list[Candidate], sentences: list[Sentence], targets: list
         if prefer:
             span = prefer[1] - prefer[0]
             pool = [c for c in pool if _span_overlap(c, prefer) >= 0.6 * min(span, c.duration)]
+        rules_note = ""
+        if allow is not None:                    # the user's rules are hard filters, applied before ranking
+            before = len(pool)
+            pool = [c for c in pool if allow(c)]
+            if before and not pool:
+                rules_note = ("No complete moment satisfies your rules, so this reel was not made. "
+                              "Nothing was added to fill it.")
         conflict_note = ""
         if strict:
             # strict never trades the end of an answer for the clock: pieces that stop mid-answer don't count
@@ -548,8 +555,8 @@ def select(candidates: list[Candidate], sentences: list[Sentence], targets: list
             if best is None or score > best[0]:
                 best = (score, c)
         if best is None:
-            note = conflict_note or ("No further complete, distinct moment is long enough for this reel. "
-                                     "Adding filler would cut a thought or repeat an earlier reel.")
+            note = conflict_note or rules_note or ("No further complete, distinct moment is long enough for this "
+                                                   "reel. Adding filler would cut a thought or repeat an earlier reel.")
             results.append(Selection(reel=k, target=target, candidate=None, note=note))
             continue
         score, c = best
@@ -578,7 +585,8 @@ def _overlaps(a: Candidate, b: Candidate, sentences: list[Sentence]) -> bool:
 def analyse(words: list[dict], media_end: float, *, targets: list[float] | None = None, strict: bool = False,
             include_question: str = "auto", hard_max: float | None = None,
             speakers: list[str | None] | None = None, profile: str | None = None,
-            exclude: list[tuple[float, float]] | None = None, prefer: tuple[float, float] | None = None) -> dict:
+            exclude: list[tuple[float, float]] | None = None, prefer: tuple[float, float] | None = None,
+            allow=None, min_seconds: float = MIN_ABSOLUTE_SECONDS) -> dict:
     """Whole-conversation analysis. Returns sentences, units, ranked candidates and selections."""
     sentences = split_sentences(words)
     if speakers is not None and len(speakers) == len(sentences):
@@ -588,9 +596,9 @@ def analyse(words: list[dict], media_end: float, *, targets: list[float] | None 
     cap = max(hard_max_for(t, hard_max) for t in (targets or [60.0]))
     candidates = [score_candidate(c, sentences, units)
                   for c in make_candidates(sentences, units, media_end=media_end, hard_max=cap,
-                                           include_question=include_question)]
+                                           include_question=include_question, min_seconds=min_seconds)]
     selections = select(candidates, sentences, targets or [], strict=strict, hard_max=hard_max, profile=profile,
-                        exclude=exclude, prefer=prefer)
+                        exclude=exclude, prefer=prefer, allow=allow)
     return {"sentences": sentences, "units": units, "candidates": candidates, "selections": selections}
 
 

@@ -136,3 +136,46 @@ def test_every_reel_has_a_truthful_hook_and_real_editing(made):
         assert r["qc"] == "PASS" and not r.get("needs_review")
         info = media.video_info(Path(r["final"]))
         assert (info["width"], info["height"]) == (1080, 1920)
+
+
+# --- optional rules, enforced on real speech -------------------------------------------------------------------
+
+def _run_with_rules(interview, tmp_path_factory, text: str, targets=(45.0,)):
+    from quillcut import rules as rules_mod
+    out = tmp_path_factory.mktemp("ruled")
+    parsed = rules_mod.parse(text)
+    settings = {"intensity": "dynamic", "aspect": "9:16", "cta": None, "music": None, "include_question": "auto",
+                "hook_style": None, "strict": False, "targets": list(targets)}
+    rules_mod.apply_to_options(parsed, settings)
+    return conversation_job.run(
+        interview, rights="own_footage", targets=settings["targets"], fast=True, use_llm=False, verify=True,
+        publish_dir=out, rules=parsed,
+        options=reelplan.PlanOptions(intensity=settings["intensity"], aspect=settings["aspect"],
+                                     hook_style=settings["hook_style"]))
+
+
+def test_a_topic_rule_picks_only_the_matching_answer(interview, tmp_path_factory):
+    res = _run_with_rules(interview, tmp_path_factory, "Only clips about mornings.\nNo profanity.", targets=(45.0, 45.0))
+    made = [r for r in res["results"] if r.get("final")]
+    skipped = [r for r in res["results"] if r.get("rejected")]
+    assert len(made) == 1 and len(skipped) == 1
+    assert "rules" in skipped[0]["rejected"].lower() or "distinct" in skipped[0]["rejected"].lower()
+    checks = {c["rule"]: c for c in made[0]["rules_check"]}
+    assert all(c["ok"] for c in checks.values()), checks
+    assert any("mornings" in k for k in checks)
+    assert not made[0].get("needs_review")
+
+
+def test_a_rule_nothing_satisfies_makes_no_reel_and_says_why(interview, tmp_path_factory):
+    res = _run_with_rules(interview, tmp_path_factory, "Only clips about quantum physics")
+    assert not [r for r in res["results"] if r.get("final")]
+    assert "rules" in res["results"][0]["rejected"].lower()
+
+
+def test_rules_can_change_the_edit_and_the_hook(interview, tmp_path_factory):
+    res = _run_with_rules(interview, tmp_path_factory, "Square video\nHigh energy\nStart with a question\nNo cold open")
+    reel = next(r for r in res["results"] if r.get("final"))
+    assert reel["aspect"] == "1:1" and reel["intensity"] == "high_energy"
+    assert reel["hook"]["kind"] in ("question", "opening")
+    info = media.video_info(Path(reel["final"]))
+    assert (info["width"], info["height"]) == (1080, 1080)

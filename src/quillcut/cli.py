@@ -213,10 +213,31 @@ def cmd_clip(args) -> int:
     if not targets:
         print("--targets needs at least one duration")
         return 2
-    options = reelplan.PlanOptions(intensity=args.intensity, aspect=args.aspect, cta=args.cta)
-    out = run(Path(args.video), rights=args.rights, targets=targets, caption_style=args.style, options=options,
-              strict=args.strict, include_question=args.include_question, fast=args.fast,
-              use_llm=not args.no_llm, verify=not args.no_verify,
+    video = Path(args.video)
+    if not video.is_file():
+        print(f"No video found at {video}. A video is required; rules alone cannot make reels.")
+        return 2
+    from . import rules as rules_mod
+    text = args.rules or ""
+    if args.rules_file:
+        try:
+            text = (text + "\n" + Path(args.rules_file).read_text(encoding="utf-8")).strip()
+        except OSError as exc:
+            print(f"Could not read the rules file: {exc}")
+            return 2
+    parsed = rules_mod.parse(text)                      # optional: no rules is fine
+    settings = {"intensity": args.intensity, "aspect": args.aspect, "cta": args.cta, "music": None,
+                "include_question": args.include_question, "hook_style": None, "strict": args.strict,
+                "targets": targets}
+    for note in rules_mod.apply_to_options(parsed, settings):
+        print("rule:", note)
+    for line in parsed.advisory:
+        print("not enforced automatically:", line)
+    options = reelplan.PlanOptions(intensity=settings["intensity"], aspect=settings["aspect"], cta=settings["cta"],
+                                   hook_style=settings["hook_style"])
+    out = run(video, rights=args.rights, targets=settings["targets"], caption_style=args.style, options=options,
+              strict=bool(settings["strict"]), include_question=settings["include_question"], fast=args.fast,
+              use_llm=not args.no_llm, verify=not args.no_verify, rules=parsed,
               publish_dir=Path(args.out) if args.out else None, profile=args.content_style)
     _print(out)
     return 0 if all(r.get("qc") == "PASS" or r.get("rejected") for r in out["results"]) else 1
@@ -303,6 +324,8 @@ def main(argv=None) -> int:
     cl.add_argument("--include-question", dest="include_question", choices=["auto", "yes", "no"], default="auto")
     cl.add_argument("--strict", action="store_true",
                     help="never run past the target; report the conflict instead of keeping the full answer")
+    cl.add_argument("--rules", default=None, help="optional rules in plain words, e.g. \"only about pricing; no profanity\"")
+    cl.add_argument("--rules-file", dest="rules_file", default=None, help="optional text file with one rule per line")
     cl.add_argument("--cta", default=None, help="closing line shown over the last seconds")
     cl.add_argument("--out", default=None, help="folder for the finished reels")
     cl.add_argument("--fast", action="store_true", help="veryfast encode (drafts)")

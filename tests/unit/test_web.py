@@ -449,3 +449,87 @@ def test_unusable_model_post_falls_back_to_the_template(monkeypatch):
     monkeypatch.setattr(copywriter, "_ask_post", lambda *a, **k: None)
     post = copywriter.social_post(None, None, TRANSCRIPT, content_style=None, url="http://x", model="m")
     assert post["source"] == "template" and post["bullets"] and post["hashtags"]
+
+
+# --- two inputs: a video (required) and rules (optional) ---------------------------------------------------------
+
+def test_nothing_runs_without_a_video_even_with_rules(app):
+    port, _ = app
+    for body in ({**REELS}, {**REELS, "rules": "Only clips about pricing"}, {"kind": "analyze"},
+                 {**REELS, "rules": "x", "upload_id": "0" * 12}, {**REELS, "upload_id": "../../etc"}):
+        status, _, data = call(port, "POST", "/api/jobs", body)
+        assert status == 400, body
+        assert "Upload a video first" in as_json(data)["error"]
+    status, _, data = call(port, "POST", "/api/jobs", {**REELS, "rules": "Only clips about pricing"})
+    assert "Rules on their own can't make reels" in as_json(data)["error"]
+
+
+def test_a_video_alone_is_enough(app, monkeypatch):
+    port, tmp = app
+    seen: dict = {}
+    monkeypatch.setattr(conversation_job, "run", _fake_run(tmp, seen))
+    up = as_json(upload(port)[2])
+    job = wait_for(port, as_json(call(port, "POST", "/api/jobs", {**REELS, "upload_id": up["upload_id"]})[2])["id"])
+    assert job["status"] == "done"
+    assert job["rules_report"] == {"applied": [], "advisory": [], "filters": False}
+
+
+def test_rules_are_parsed_applied_and_reported(app, monkeypatch):
+    port, tmp = app
+    seen: dict = {}
+
+    def capture(video, *, rules=None, **kw):
+        seen["rules"] = rules
+        return _fake_run(tmp, seen)(video, **kw)
+    monkeypatch.setattr(conversation_job, "run", capture)
+    up = as_json(upload(port)[2])
+    text = "Only clips about pricing\nNo profanity\nHigh energy\nSquare video\nKeep the tone warm"
+    job = wait_for(port, as_json(call(port, "POST", "/api/jobs",
+                                      {**REELS, "upload_id": up["upload_id"], "rules": text})[2])["id"])
+    assert job["status"] == "done"
+    r = seen["rules"]
+    assert r.include_any == ["pricing"] and r.profanity and r.filters
+    opts = job["options"]
+    assert opts["intensity"] == "high_energy" and opts["aspect"] == "1:1"          # rules beat the page
+    assert any("intensity" in n for n in job["rule_notes"])
+    assert job["rules_report"]["advisory"] == ["Keep the tone warm"]
+    assert any("Not enforced automatically: Keep the tone warm" in m for m in job["messages"])
+
+
+def test_rules_are_validated(app):
+    port, _ = app
+    up = as_json(upload(port)[2])
+    status, _, data = call(port, "POST", "/api/jobs", {**REELS, "upload_id": up["upload_id"], "rules": "x" * 4001})
+    assert status == 400 and "at most 4000" in as_json(data)["error"]
+    status, _, data = call(port, "POST", "/api/jobs", {**REELS, "upload_id": up["upload_id"], "rules": ["a"]})
+    assert status == 400 and "must be text" in as_json(data)["error"]
+
+
+def test_rules_preview_needs_no_video_and_counts_surviving_moments(app, monkeypatch):
+    port, _ = app
+    status, _, data = call(port, "POST", "/api/rules/preview", {"rules": "Only clips about pricing\nBe funny"})
+    body = as_json(data)
+    assert status == 200 and body["capacity"] is None
+    assert body["report"]["applied"][0]["kind"] == "filter" and body["report"]["advisory"] == ["Be funny"]
+
+    cands = [{"start": 0.0, "end": 40.0, "duration": 40.0, "score": 0.9, "text": "We changed our pricing in March"},
+             {"start": 50.0, "end": 90.0, "duration": 40.0, "score": 0.8, "text": "We baked sourdough bread daily"},
+             {"start": 100.0, "end": 140.0, "duration": 40.0, "score": 0.7, "text": "Pricing experiments taught us a lot"}]
+    monkeypatch.setattr(conversation_job, "analyse_only", lambda video, **k: {
+        "duration": 150.0, "capacity": 3, "moments": [], "questions": 3, "speakers": ["A"], "units": 3,
+        "sentences": 9, "min_seconds": 12.0, "candidates": cands})
+    up = as_json(upload(port)[2])
+    job_id = as_json(call(port, "POST", "/api/jobs", {"kind": "analyze", "upload_id": up["upload_id"]})[2])["id"]
+    job = wait_for(port, job_id)
+    assert "candidates" not in job["analysis"]                         # the page never receives the raw texts
+    status, _, data = call(port, "POST", "/api/rules/preview",
+                           {"rules": "only about pricing", "analysis_job": job_id})
+    assert as_json(data)["capacity"]["capacity"] == 2 and as_json(data)["capacity"]["passing"] == 2
+    status, _, data = call(port, "POST", "/api/rules/preview", {"rules": "", "analysis_job": job_id})
+    assert as_json(data)["capacity"]["capacity"] == 3
+
+
+def test_rules_preview_rejects_oversized_input(app):
+    port, _ = app
+    assert call(port, "POST", "/api/rules/preview", {"rules": "x" * 4001})[0] == 400
+    assert call(port, "POST", "/api/rules/preview", {"rules": 5})[0] == 400

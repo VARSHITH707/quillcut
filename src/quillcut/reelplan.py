@@ -50,6 +50,7 @@ class PlanOptions:
     show_question_label: bool = True
     logo: str | None = None            # path to a brand image shown on every frame
     caption_y: float | None = None     # caption centre as a fraction of height; kept inside 0.35-0.65
+    hook_style: str | None = None      # from the user's rules: "question" | "cold_open" | "opening"
 
 
 @dataclass
@@ -176,13 +177,20 @@ def key_phrases(sentences: list[cv.Sentence], limit: int) -> list[tuple[str, str
     return [surface[k] for k in ranked[:limit]]
 
 
-def choose_hook(sentences: list[cv.Sentence], c: cv.Candidate, allow_cold_open: bool) -> dict:
-    """A truthful hook: a stronger line from later in the answer, the question, or the opening line."""
+def choose_hook(sentences: list[cv.Sentence], c: cv.Candidate, allow_cold_open: bool,
+                hook_style: str | None = None) -> dict:
+    """A truthful hook: a stronger line from later in the answer, the question, or the opening line.
+
+    hook_style (from the user's rules): "question" prefers the question, "opening" forbids a cold open."""
     body = sentences[c.first:c.last + 1]
     answer = [s for s in body if not (s.question and c.question_included and s.idx == c.first)]
     first = answer[0] if answer else body[0]
     question = sentences[c.first] if c.question_included and sentences[c.first].question else None
     cold = None
+    if hook_style in ("question", "opening"):
+        allow_cold_open = False
+    if hook_style == "question" and question is not None and question.n_words > 18:
+        question = None
     if allow_cold_open and len(answer) >= 3:
         base = cv.hook_strength(first)
         for s in answer[1:]:
@@ -269,7 +277,7 @@ def build(c: cv.Candidate, sentences: list[cv.Sentence], ref: SourceRef, cfg: di
     words = [w for s in body for w in s.words]
     layout = layout_for(ref, out_w, out_h, cfg["source_quality"]["max_upscale"])
 
-    hook = choose_hook(sentences, c, options.cold_open and knobs["cold_open"])
+    hook = choose_hook(sentences, c, options.cold_open and knobs["cold_open"], options.hook_style)
     cold_seg: tuple[float, float] | None = None
     if hook["kind"] == "cold_open":
         hs: cv.Sentence = hook["sentence"]

@@ -69,6 +69,18 @@
               <ul class="moments" id="moments"></ul>
             </div>
           </div>
+
+          <div class="rules" id="rules-box">
+            <label for="rules"><b>Rules</b> <span class="optional">optional</span></label>
+            <p class="hint">Tell Quillcut what every reel must follow, one rule per line. It works fine without any. A video is always required.</p>
+            <textarea id="rules" rows="5" maxlength="4000" placeholder="Only clips about pricing&#10;Never mention competitors&#10;No profanity&#10;No longer than 45 seconds&#10;High energy"></textarea>
+            <div class="rules__row">
+              <label class="mini" for="rules-file">Load rules from a file</label>
+              <input type="file" id="rules-file" accept=".txt,.md,text/plain" hidden>
+              <button type="button" class="link" id="rules-clear" hidden>Clear rules</button>
+            </div>
+            <div class="rules__report" id="rules-report" aria-live="polite"></div>
+          </div>
         </article>
 
         <!-- 2 · reels and durations -->

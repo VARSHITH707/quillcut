@@ -90,6 +90,38 @@ passed**, an editable **caption and hashtags**, and download buttons. Two button
   you are told how long the answer needs, instead of cutting it off.
 * A 90-second answer that is longer than the maximum ends at a paragraph boundary and is marked as a part.
 
+## Two inputs: a video (required) and rules (optional)
+
+Quillcut never runs without a **video**. Rules are optional: with no rules it behaves exactly as described
+above, and rules on their own cannot make reels. In the app, type rules (or load a `.txt` file) under the
+video. A live preview shows what Quillcut understood *before* anything runs.
+
+Write one rule per line, in plain words. These are **enforced**:
+
+| You write | What happens |
+|---|---|
+| `Only clips about pricing and churn` | Only moments that mention those words are considered |
+| `Must mention onboarding` | Every moment must mention it |
+| `Never mention Acme Corp` / `Avoid competitors` | Moments that say it are never chosen |
+| `No profanity` / `Keep it clean` | Moments with swearing are never chosen |
+| `Every clip must include a statistic` | The reel must contain a spoken number |
+| `No longer than 45 seconds` / `At least 20 seconds` / `35 second reels` | Length limit, minimum, or target |
+| `High energy` / `Minimal edit` / `Square video` / `16:9` | Editing intensity and shape |
+| `No music` / `Add subtle music` | Background music |
+| `Skip the interviewer's question` / `Keep the question` | Whether the question is in the video |
+| `Start with a question` / `No cold open` | How the hook is chosen |
+| `End with "Follow for more"` | Closing line |
+
+How rules are treated:
+
+* **Rules win over the page's settings,** and every change is listed (for example *High energy* overrides a
+  *Clean* selection).
+* A moment that breaks a rule is never chosen. If the rules rule everything out, you get no reel and a reason,
+  never a reel that breaks your rules.
+* The rules are **re-checked against the finished reel's actual words** and shown on each reel card.
+* A line Quillcut cannot check mechanically (for example *keep the tone friendly*) is listed as **not enforced**.
+  The local model gives a non-binding opinion per reel, clearly labelled as an opinion.
+
 ## How the clipping decision is made
 
 ```mermaid
@@ -148,6 +180,8 @@ quillcut doctor                               # check ffmpeg, GPU, fonts and mod
 | `clip` option | Meaning |
 |---|---|
 | `--targets 35,60,90` | One target (seconds) per reel |
+| `--rules "only about pricing; no profanity"` | Optional rules in plain words (a video is still required) |
+| `--rules-file rules.txt` | Optional rules, one per line |
 | `--strict` | Never exceed a target; report the conflict instead |
 | `--include-question auto\|yes\|no` | Keep the interviewer's question in the reel |
 | `--intensity clean\|dynamic\|high_energy` | How much editing |

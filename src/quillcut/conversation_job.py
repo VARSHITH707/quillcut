@@ -10,7 +10,10 @@ from . import jobs, media, reframe, reelplan, semantic, speakers
 from .config import load_config
 from .formats import load_style
 from .gpu import GpuLock
+import dataclasses
+
 from .jobs import SourceRejected, merge_style, prepare, render_and_export
+from .rules import Rules
 from .storage import atomic_write_json, read_json
 
 log = logging.getLogger("quillcut")
@@ -52,6 +55,25 @@ def duration_note(target: float, actual: float, cold_open: bool) -> str:
     return f"Close to the {target:.0f}s target at {actual:.0f}s{extra}."
 
 
+def capacity_with_rules(summaries: list[dict], rules: Rules, target: float = 45.0) -> dict:
+    """How many distinct complete moments survive the rules, from the compact list an analysis stored."""
+    cap = cv.hard_max_for(target, rules.max_seconds)
+    pool = []
+    for s in summaries:
+        if s["duration"] > cap or (rules.min_seconds and s["duration"] < rules.min_seconds):
+            continue
+        c = cv.Candidate(unit=0, first=0, last=0, start=s["start"], end=s["end"], question_included=False,
+                         partial=False, text=s["text"])
+        c.score = s["score"]
+        pool.append((c, rules.allows(s["text"], s["duration"])))
+    passing = [c for c, ok in pool if ok]
+    picked: list[cv.Candidate] = []
+    for c in sorted(passing, key=lambda c: -c.score):
+        if not any(cv._overlaps(c, p, []) for p in picked):
+            picked.append(c)
+    return {"capacity": len(picked), "candidates": len(pool), "passing": len(passing)}
+
+
 def moment_summary(c: cv.Candidate, sentences: list[cv.Sentence], units: list[cv.Unit]) -> dict:
     u = units[c.unit]
     hook = sentences[c.hook_idx] if c.hook_idx is not None else sentences[c.first]
@@ -76,7 +98,11 @@ def analyse_only(video: Path, fmt: str = "gaming", rights: str | None = None, on
     for c in sorted(cands, key=lambda c: -c.score):
         if c.score >= 0.5 and not any(cv._overlaps(c, r, sents) for r in ranked):
             ranked.append(c)
+    summaries = [{"start": round(c.start, 2), "end": round(c.end, 2), "duration": round(c.duration, 2),
+                  "score": c.score, "text": c.text[:3000]}
+                 for c in sorted(cands, key=lambda c: -c.score)[:400]]      # enough to preview rules against
     return {
+        "candidates": summaries,
         "duration": round(prep.ref.duration, 1),
         "sentences": len(sents),
         "speakers": sorted({s.speaker for s in sents if s.speaker}),
@@ -160,9 +186,22 @@ def run(video: Path, *, rights: str | None, targets: list[float], fmt: str = "ga
         include_question: str = "auto", hard_max: float | None = None, fast: bool = False,
         publish_dir: Path | None = None, use_llm: bool = True, verify: bool = True, on_progress=None,
         profile: str | None = None, exclude: list[tuple[float, float]] | None = None,
-        prefer: tuple[float, float] | None = None) -> dict:
+        prefer: tuple[float, float] | None = None, rules: Rules | None = None) -> dict:
     options = options or reelplan.PlanOptions()
     cfg = load_config(fmt)
+    allow = None
+    min_seconds = cv.MIN_ABSOLUTE_SECONDS
+    if rules is not None:
+        if rules.filters:
+            allow = lambda c: rules.allows(c.text, c.duration)                   # noqa: E731
+        if rules.min_seconds:
+            min_seconds = max(rules.min_seconds, 5.0)
+        if rules.max_seconds:
+            hard_max = rules.max_seconds if hard_max is None else min(hard_max, rules.max_seconds)
+            targets = [min(t, rules.max_seconds) for t in targets]
+            options = dataclasses.replace(options, cold_open=False)   # a replayed hook line would add seconds
+        if rules.hook_style:
+            options = dataclasses.replace(options, hook_style=rules.hook_style)
 
     def progress(stage: str, done: int = 0, total: int = 0) -> None:
         if on_progress:
@@ -175,7 +214,7 @@ def run(video: Path, *, rights: str | None, targets: list[float], fmt: str = "ga
         progress("understanding")
         out = cv.analyse(prep.words, prep.ref.duration, targets=targets, strict=strict,
                          include_question=include_question, hard_max=hard_max, speakers=labels,
-                         profile=profile, exclude=exclude, prefer=prefer)
+                         profile=profile, exclude=exclude, prefer=prefer, allow=allow, min_seconds=min_seconds)
         sents, units = out["sentences"], out["units"]
         selections = out["selections"]
 
@@ -207,7 +246,7 @@ def run(video: Path, *, rights: str | None, targets: list[float], fmt: str = "ga
                 if not vetoed:
                     break
                 selections = cv.select(out["candidates"], sents, targets, strict=strict, hard_max=hard_max,
-                                       profile=profile, exclude=exclude, prefer=prefer)
+                                       profile=profile, exclude=exclude, prefer=prefer, allow=allow)
 
         style = merge_style(load_style(fmt, caption_style or cfg["editing"]["caption_style"]), style_overrides)
         results: list[dict] = []
@@ -241,6 +280,20 @@ def run(video: Path, *, rights: str | None, targets: list[float], fmt: str = "ga
                 "qc": res["qc"], "failures": res["failures"], "warnings": res["warnings"],
                 "final": res.get("final"), "published": res.get("published"), "duration": res["duration"],
             }
+            if rules is not None and not rules.empty:
+                # check the rules against what is actually in the finished reel (pauses and fillers removed)
+                spoken = " ".join(w["word"] for w in reelplan.map_words(
+                    built.plan.segments, [w for s in sents[c.first:c.last + 1] for w in s.words]))
+                entry["rules_check"] = rules.check(spoken, built.plan.duration)
+                broken = [r for r in entry["rules_check"] if not r["ok"]]
+                if broken:
+                    entry["needs_review"] = True
+                    entry["failures"] = entry["failures"] + [f"rule: {r['rule']} ({r['detail']})" for r in broken]
+                if rules.advisory and use_llm:
+                    opinion = semantic.check_rules(spoken, rules.advisory,
+                                                   url=llm.get("url", "http://localhost:11434"),
+                                                   model=llm.get("text_model", "qwen2.5:7b-instruct-q4_K_M"))
+                    entry["rules_opinion"] = opinion
             if res["qc"] == "PASS" and verify:
                 progress("validating", done, total)
                 # what should be heard, in playback order (a cold open plays its hook line first)

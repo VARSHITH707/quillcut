@@ -79,6 +79,7 @@
       rights: $("rights").value,
       rights_confirmed: $("rights-ok").checked,
       reels: state.targets.map((target) => ({ target })),
+      rules: $("rules").value.trim(),
     };
   }
 
@@ -178,9 +179,11 @@
     const a = state.analysis;
     if (!a) { hint.textContent = ""; hint.className = "hint"; return; }
     const n = state.targets.length;
-    if (n > a.capacity) {
+    const cap = state.rulesCapacity != null ? state.rulesCapacity : a.capacity;
+    const withRules = state.rulesCapacity != null ? " that follow your rules" : "";
+    if (n > cap) {
       hint.className = "hint hint--warn";
-      hint.textContent = `This video has ${a.capacity} distinct complete moment${a.capacity === 1 ? "" : "s"}. ` +
+      hint.textContent = `This video has ${cap} distinct complete moment${cap === 1 ? "" : "s"}${withRules}. ` +
         `You asked for ${n}: Quillcut will make ${a.capacity} and tell you why it stopped, instead of adding filler.`;
     } else {
       hint.className = "hint";
@@ -220,6 +223,7 @@
     if (saved.caption_y) set("caption-y", clamp(Math.round(saved.caption_y * 100), 35, 65));
     set("content-style", saved.content_style);
     set("include-question", saved.include_question);
+    set("rules", saved.rules);
     ["intensity", "aspect", "quality", "music"].forEach((name) => {
       const input = saved[name] && document.querySelector(`input[name="${name}"][value="${saved[name]}"]`);
       if (input) input.checked = true;
@@ -309,6 +313,53 @@
     }
   }
 
+  /* ---------- rules (optional) ---------- */
+  let rulesTimer;
+  function renderRulesReport(res) {
+    const box = $("rules-report");
+    const rep = res.report || { applied: [], advisory: [] };
+    const rows = [];
+    rep.applied.forEach((a) => rows.push(el("div", { className: `rule rule--${a.kind}` },
+      el("b", { textContent: a.kind === "filter" ? "Enforced" : "Setting" }), el("span", { textContent: a.meaning }))));
+    rep.advisory.forEach((line) => rows.push(el("div", { className: "rule rule--advisory" },
+      el("b", { textContent: "Not enforced" }),
+      el("span", { textContent: `“${line}” can't be checked automatically. Quillcut will still ask the local model for an opinion on each reel.` }))));
+    if (res.capacity && rep.filters) {
+      state.rulesCapacity = res.capacity.capacity;
+      rows.push(el("div", { className: "rule rule--count" },
+        el("span", { textContent: `With these rules: ${res.capacity.capacity} complete moment${res.capacity.capacity === 1 ? "" : "s"} qualify.` })));
+    } else {
+      state.rulesCapacity = null;
+    }
+    box.replaceChildren(...rows);
+    $("rules-clear").hidden = !$("rules").value.trim();
+    capacityHint();
+  }
+  function previewRules() {
+    clearTimeout(rulesTimer);
+    rulesTimer = setTimeout(async () => {
+      const text = $("rules").value;
+      if (!text.trim()) { renderRulesReport({}); return; }
+      try {
+        renderRulesReport(await post("/api/rules/preview", { rules: text, analysis_job: state.analysisJob }));
+      } catch (err) {
+        $("rules-report").replaceChildren(el("div", { className: "rule rule--advisory", textContent: err.message }));
+      }
+    }, 500);
+  }
+  function loadRulesFile(file) {
+    if (!file) return;
+    if (file.size > 65536) return toast("That file is too large for rules (64 KB max).");
+    const reader = new FileReader();
+    reader.onload = () => {
+      $("rules").value = String(reader.result).slice(0, 4000);
+      if (String(reader.result).length > 4000) toast("Only the first 4000 characters were used.");
+      paintPreview();
+      previewRules();
+    };
+    reader.readAsText(file);
+  }
+
   /* ---------- analysis ---------- */
   async function startAnalysis() {
     $("analysis").hidden = false;
@@ -318,6 +369,7 @@
     $("analysis-fill").style.setProperty("--p", 0.1);
     try {
       const job = await post("/api/jobs", { kind: "analyze", upload_id: state.upload.upload_id });
+      state.analysisJob = job.id;
       pollAnalysis(job.id);
     } catch (err) {
       $("analysis-state").textContent = err.message;
@@ -368,6 +420,7 @@
       el("q", { textContent: m.hook.length > 110 ? m.hook.slice(0, 107) + "…" : m.hook }))));
     if (a.capacity > 0 && !load().targets) setCount(Math.min(3, a.capacity));
     capacityHint();
+    previewRules();
     refreshGo();
   }
 
@@ -376,7 +429,7 @@
     const ready = Boolean(state.upload) && $("rights-ok").checked && !state.activeJob;
     $("go").disabled = !ready;
     $("go-hint").textContent = state.activeJob ? "Your reels are being made."
-      : !state.upload ? "Upload a video and tick the box to continue."
+      : !state.upload ? "Upload a video to start. Rules are optional, but a video is required."
       : !$("rights-ok").checked ? "Tick the box to confirm you can use this video." : "Ready when you are.";
   }
 
@@ -492,6 +545,9 @@
       el("span", { className: "badge" + (review ? " badge--warn" : ""), textContent: review ? "Needs a look" : "Checks passed" }),
     ];
     if (clip.extended) badges.push(el("span", { className: "badge badge--ext", textContent: "Extended to finish the thought" }));
+    if ((clip.rules_check || []).length && clip.rules_check.every((r) => r.ok)) {
+      badges.push(el("span", { className: "badge", textContent: "Follows your rules" }));
+    }
     const durations = el("p", { className: "reel__dur" },
       el("b", { textContent: `${fmtTime(clip.actual || clip.duration)}` }),
       ` actual · ${Math.round(clip.target || 0)}s target · source ${fmtTime(clip.source_start || 0)}–${fmtTime(clip.source_end || 0)}`);
@@ -518,6 +574,13 @@
           { onclick: () => copy(tags.join(" "), "Hashtags") })),
       el("details", { className: "reel__more" },
         el("summary", { textContent: "How this reel was made" }),
+        (clip.rules_check || []).length ? el("div", {}, el("p", { className: "hint", textContent: "Your rules" }),
+          checksList(clip.rules_check.map((r) => ({ status: r.ok ? "PASS" : "FAIL", name: r.rule, message: r.detail })))) : "",
+        (clip.rules_opinion || []).length ? el("div", {},
+          el("p", { className: "hint", textContent: "Local model's opinion on the rules it cannot check (not guaranteed)" }),
+          el("ul", { className: "checks" }, clip.rules_opinion.map((o) => el("li", {
+            className: o.verdict === "yes" ? "ok" : o.verdict === "no" ? "warn" : "na",
+            textContent: `${o.verdict.toUpperCase()}: ${o.rule}${o.reason ? " — " + o.reason : ""}` })))) : "",
         checksList(clip.validation || []),
         el("p", { className: "hint", textContent: `Edit: ${clip.intensity || "dynamic"} · ${clip.aspect || "9:16"}` +
           `${clip.question_included ? " · question included" : ""}` }),
@@ -645,6 +708,10 @@
     });
     $("rights-ok").addEventListener("change", refreshGo);
     $("rights").addEventListener("change", paintPreview);
+    $("rules").addEventListener("input", () => { paintPreview(); previewRules(); });
+    $("rules-file").addEventListener("change", (e) => loadRulesFile(e.target.files[0]));
+    $("rules-clear").addEventListener("click", () => { $("rules").value = ""; paintPreview(); previewRules(); });
+    previewRules();
     $("go").addEventListener("click", () => startJob());
 
     refreshGo();

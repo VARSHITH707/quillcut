@@ -26,6 +26,7 @@ import httpx
 
 from .. import jobs as pipeline_jobs
 from .. import reelplan
+from .. import rules as rules_mod
 from ..config import load_config, load_yaml
 from ..formats import list_formats
 from ..paths import CLIPPING, FORMATS
@@ -267,7 +268,9 @@ def ollama_state() -> dict:
 def job_view(job: dict) -> dict:
     view = {k: job.get(k) for k in ("id", "kind", "filename", "status", "stage", "done", "total", "error", "note",
                                       "created", "started", "finished", "options", "analysis", "capacity",
-                                      "speakers", "messages")}
+                                      "speakers", "messages", "rules_report", "rule_notes")}
+    if view.get("analysis"):                       # the stored candidate texts are for the rules preview only
+        view["analysis"] = {k: v for k, v in view["analysis"].items() if k != "candidates"}
     clips = []
     for c in job.get("clips", []):
         c = dict(c)
@@ -406,6 +409,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._upload(query)
         if method == "POST" and path == "/api/jobs":
             return self._create_job()
+        if method == "POST" and path == "/api/rules/preview":
+            return self._rules_preview()
         if method == "GET" and path == "/api/jobs":
             return self._json({"jobs": [job_view(j) for j in s.all()]})
         m = re.fullmatch(r"/api/jobs/([0-9a-f]{12})(/zip)?", path)
@@ -481,14 +486,35 @@ class Handler(BaseHTTPRequestHandler):
         self._json({"upload_id": upload_id, "name": name, "size": length, "duration": round(info["duration"], 1),
                     "width": info["width"], "height": info["height"], "warning": warning}, 201)
 
+    def _rules_preview(self) -> None:
+        """What the rules mean, before anything runs. Needs no video; with an analysis it also shows how many
+        complete moments would survive the rules."""
+        from ..conversation_job import capacity_with_rules
+        body = self._read_json()
+        text = body.get("rules", "")
+        if not isinstance(text, str) or len(text) > rules_mod.MAX_RULE_CHARS:
+            raise ApiError(400, f"Rules can be at most {rules_mod.MAX_RULE_CHARS} characters.")
+        parsed = rules_mod.parse(text)
+        out = {"report": parsed.report(), "capacity": None}
+        job = store().get(str(body.get("analysis_job", ""))) if ID_RE.match(str(body.get("analysis_job", ""))) else None
+        analysis = (job or {}).get("analysis") or {}
+        if analysis.get("candidates") is not None:
+            out["capacity"] = (capacity_with_rules(analysis["candidates"], parsed) if parsed.filters
+                               else {"capacity": analysis.get("capacity"), "candidates": len(analysis["candidates"]),
+                                     "passing": len(analysis["candidates"])})
+        self._json(out)
+
     def _create_job(self) -> None:
         body = self._read_json()
         upload_id = str(body.get("upload_id", ""))
+        # a video is mandatory; rules are optional and can never replace it
+        need_video = ("Upload a video first. Rules on their own can't make reels."
+                      if body.get("rules") else "Upload a video first.")
         if not ID_RE.match(upload_id) or not (UPLOADS / upload_id).is_dir():
-            raise ApiError(400, "Upload a video first.")
+            raise ApiError(400, need_video)
         files = [p for p in (UPLOADS / upload_id).iterdir() if p.suffix.lower() in VIDEO_EXT]
         if not files:
-            raise ApiError(400, "Upload a video first.")
+            raise ApiError(400, need_video)
         kind = body.get("kind") or ("reels" if "reels" in body else "auto")
         if kind not in ("auto", "analyze", "reels"):
             raise ApiError(400, "Unknown job type.")
