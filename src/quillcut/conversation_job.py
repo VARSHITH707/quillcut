@@ -289,8 +289,8 @@ def run(video: Path, *, rights: str | None, targets: list[float], fmt: str = "ga
                 if broken:
                     entry["needs_review"] = True
                     entry["failures"] = entry["failures"] + [f"rule: {r['rule']} ({r['detail']})" for r in broken]
-                if rules.advisory and use_llm:
-                    opinion = semantic.check_rules(spoken, rules.advisory,
+                if rules.key_advisory() and use_llm:
+                    opinion = semantic.check_rules(spoken, rules.key_advisory(),
                                                    url=llm.get("url", "http://localhost:11434"),
                                                    model=llm.get("text_model", "qwen2.5:7b-instruct-q4_K_M"))
                     entry["rules_opinion"] = opinion

@@ -499,8 +499,8 @@ def test_rules_are_parsed_applied_and_reported(app, monkeypatch):
 def test_rules_are_validated(app):
     port, _ = app
     up = as_json(upload(port)[2])
-    status, _, data = call(port, "POST", "/api/jobs", {**REELS, "upload_id": up["upload_id"], "rules": "x" * 4001})
-    assert status == 400 and "at most 4000" in as_json(data)["error"]
+    status, _, data = call(port, "POST", "/api/jobs", {**REELS, "upload_id": up["upload_id"], "rules": "x" * 20001})
+    assert status == 400 and "at most 20000" in as_json(data)["error"]
     status, _, data = call(port, "POST", "/api/jobs", {**REELS, "upload_id": up["upload_id"], "rules": ["a"]})
     assert status == 400 and "must be text" in as_json(data)["error"]
 
@@ -531,5 +531,86 @@ def test_rules_preview_needs_no_video_and_counts_surviving_moments(app, monkeypa
 
 def test_rules_preview_rejects_oversized_input(app):
     port, _ = app
-    assert call(port, "POST", "/api/rules/preview", {"rules": "x" * 4001})[0] == 400
+    assert call(port, "POST", "/api/rules/preview", {"rules": "x" * 20001})[0] == 400
     assert call(port, "POST", "/api/rules/preview", {"rules": 5})[0] == 400
+
+# --- inputs from anywhere: documents and links ------------------------------------------------------------------
+
+from quillcut import inputs as inputs_mod  # noqa: E402
+
+
+def test_rules_document_upload_returns_its_text(app):
+    port, _ = app
+    import zipfile as _zip
+    buf = io.BytesIO()
+    with _zip.ZipFile(buf, "w") as zf:
+        zf.writestr("word/document.xml", '<w:document xmlns:w="x"><w:body><w:p><w:r><w:t>Only clips about pricing'
+                                         '</w:t></w:r></w:p><w:p><w:r><w:t>No profanity</w:t></w:r></w:p></w:body></w:document>')
+    status, _, data = call(port, "POST", "/api/upload?kind=rules&name=brief.docx", buf.getvalue())
+    body = as_json(data)
+    assert status == 201 and body["text"].splitlines() == ["Only clips about pricing", "No profanity"]
+    assert call(port, "POST", "/api/upload?kind=rules&name=brief.exe", b"MZ" * 20)[0] == 415
+
+
+def test_rules_link_returns_text(app, monkeypatch):
+    port, _ = app
+    monkeypatch.setattr(inputs_mod, "fetch_rules_text", lambda url, work: ("Vertical 9:16\nNo profanity", "Google Doc"))
+    status, _, data = call(port, "POST", "/api/inputs/link", {"url": "https://docs.google.com/document/d/abc/edit",
+                                                             "role": "rules"})
+    assert status == 200 and as_json(data)["text"].startswith("Vertical") and as_json(data)["source"] == "Google Doc"
+
+
+def test_link_errors_are_plain_messages(app, monkeypatch):
+    port, _ = app
+    assert call(port, "POST", "/api/inputs/link", {"url": "https://x.com/a", "role": "music"})[0] == 400
+    assert call(port, "POST", "/api/inputs/link", {"url": "", "role": "video"})[0] == 400
+    status, _, data = call(port, "POST", "/api/inputs/link", {"url": "http://127.0.0.1:8765/", "role": "video"})
+    assert status == 422 and "private or local" in as_json(data)["error"]
+
+    def private(url, work):
+        raise inputs_mod.InputError("That Google Doc isn't shared publicly.")
+    monkeypatch.setattr(inputs_mod, "fetch_rules_text", private)
+    status, _, data = call(port, "POST", "/api/inputs/link", {"url": "https://docs.google.com/document/d/a/edit",
+                                                             "role": "rules"})
+    assert status == 422 and "shared publicly" in as_json(data)["error"]
+
+
+def test_video_link_becomes_uploads_and_can_make_reels(app, monkeypatch):
+    port, tmp = app
+    monkeypatch.setattr(inputs_mod, "check_url", lambda u: u)
+
+    def fake_fetch(url, dest, max_bytes, on_progress=None):
+        dest.mkdir(parents=True, exist_ok=True)
+        on_progress("Downloading 1 of 3")
+        files = [dest / "Episode 1.mp4", dest / "Episode 2.mp4", dest / "cover.jpg"]
+        for f in files:
+            f.write_bytes(b"\x00" * 2048)
+        return files
+    monkeypatch.setattr(inputs_mod, "fetch_media", fake_fetch)
+    status, _, data = call(port, "POST", "/api/inputs/link",
+                           {"url": "https://drive.google.com/drive/folders/1SKpOJVxksUGY7jHDzxdW6fjwfpKrq8bt",
+                            "role": "video"})
+    assert status == 201 and as_json(data)["kind"] == "fetch"
+    job = wait_for(port, as_json(data)["id"])
+    assert job["status"] == "done", job
+    assert [u["name"] for u in job["uploads"]] == ["Episode 1.mp4", "Episode 2.mp4"]
+    assert [p["name"] for p in job["photos"]] == ["cover.jpg"]
+
+    seen: dict = {}
+    monkeypatch.setattr(conversation_job, "run", _fake_run(tmp, seen))
+    upload_id = job["uploads"][1]["upload_id"]
+    reels = wait_for(port, as_json(call(port, "POST", "/api/jobs", {**REELS, "upload_id": upload_id})[2])["id"])
+    assert reels["status"] == "done" and reels["filename"] == "Episode 2.mp4"
+
+
+def test_failed_video_link_reports_why(app, monkeypatch):
+    port, _ = app
+    monkeypatch.setattr(inputs_mod, "check_url", lambda u: u)
+
+    def quota(url, dest, max_bytes, on_progress=None):
+        raise inputs_mod.InputError("Google is blocking downloads of this file right now (download quota exceeded).")
+    monkeypatch.setattr(inputs_mod, "fetch_media", quota)
+    job_id = as_json(call(port, "POST", "/api/inputs/link", {"url": "https://drive.google.com/file/d/abcdefghijkl/view",
+                                                            "role": "video"})[2])["id"]
+    job = wait_for(port, job_id)
+    assert job["status"] == "failed" and "quota" in job["error"]

@@ -282,18 +282,100 @@
         resetUpload();
         return showUploadError(data.error || "The upload failed. Please try again.");
       }
-      state.upload = data;
-      $("up-bar").hidden = true;
-      $("file-cancel").hidden = true;
-      $("file-remove").hidden = false;
-      $("file-info").textContent = `${fmtSize(data.size)} · ${fmtTime(data.duration)} · ${data.width}×${data.height}`;
-      if (data.warning) { $("file-warn").textContent = data.warning; $("file-warn").hidden = false; }
-      refreshGo();
-      startAnalysis();
+      useUpload(data);
     };
     xhr.onerror = () => { state.xhr = null; resetUpload(); showUploadError("The upload failed. Is the app still running?"); };
     xhr.onabort = () => { state.xhr = null; resetUpload(); };
     xhr.send(file);
+  }
+
+  /** A video is ready on the server (uploaded or fetched from a link): show it and read the conversation. */
+  function useUpload(data) {
+    state.upload = data;
+    $("drop").hidden = true;
+    $("file-chip").hidden = false;
+    $("file-name").textContent = data.name;
+    $("up-bar").hidden = true;
+    $("file-cancel").hidden = true;
+    $("file-remove").hidden = false;
+    $("file-info").textContent = `${fmtSize(data.size)} · ${fmtTime(data.duration)} · ${data.width}×${data.height}`;
+    $("file-warn").hidden = !data.warning;
+    if (data.warning) $("file-warn").textContent = data.warning;
+    $("video-pick").hidden = true;
+    refreshGo();
+    startAnalysis();
+  }
+
+  /* ---------- inputs from links ---------- */
+  let fetchTimer;
+  async function getVideoFromLink() {
+    const url = $("video-link").value.trim();
+    const note = $("video-link-state");
+    if (!url) { note.textContent = "Paste a link first."; return; }
+    showUploadError("");
+    $("video-link-go").disabled = true;
+    note.textContent = "Starting the download…";
+    try {
+      const job = await post("/api/inputs/link", { url, role: "video" });
+      pollFetch(job.id);
+    } catch (err) {
+      note.textContent = "";
+      showUploadError(err.message);
+      $("video-link-go").disabled = false;
+    }
+  }
+
+  function pollFetch(id) {
+    clearTimeout(fetchTimer);
+    fetchTimer = setTimeout(async () => {
+      const note = $("video-link-state");
+      try {
+        const job = await api(`/api/jobs/${id}`);
+        if (job.status === "queued" || job.status === "running") {
+          note.textContent = (job.progress_text || "Downloading") + "…";
+          return pollFetch(id);
+        }
+        $("video-link-go").disabled = false;
+        if (job.status === "failed") { note.textContent = ""; return showUploadError(job.error || "The download failed."); }
+        const videos = job.uploads || [];
+        const extra = [];
+        if ((job.photos || []).length) extra.push(`${job.photos.length} photo(s) received. Use one as your logo in step 4; mixing photos into the edit isn't built yet.`);
+        if ((job.problems || []).length) extra.push(`Skipped: ${job.problems.join("; ")}`);
+        note.textContent = extra.join(" ");
+        if (videos.length === 1) return useUpload(videos[0]);
+        if (!videos.length) return showUploadError("No video came from that link.");
+        const pick = $("video-pick");
+        pick.replaceChildren(...videos.map((v) => {
+          const b = el("button", { type: "button", className: "pick__item" },
+            el("b", { textContent: v.name }), el("span", { textContent: `${fmtTime(v.duration)} · ${v.width}×${v.height}` }));
+          b.addEventListener("click", () => useUpload(v));
+          return el("li", {}, b);
+        }));
+        pick.hidden = false;
+        note.textContent = `${videos.length} videos found. Pick the one to clip. ` + extra.join(" ");
+      } catch (err) {
+        note.textContent = err.message + " Retrying…";
+        pollFetch(id);
+      }
+    }, 1500);
+  }
+
+  async function getRulesFromLink() {
+    const url = $("rules-link").value.trim();
+    const note = $("rules-state");
+    if (!url) { note.textContent = "Paste a link first."; return; }
+    note.textContent = "Reading the document…";
+    $("rules-link-go").disabled = true;
+    try {
+      const res = await post("/api/inputs/link", { url, role: "rules" });
+      $("rules").value = res.text;
+      note.textContent = `Loaded ${res.chars.toLocaleString()} characters from the ${res.source}.`;
+      paintPreview();
+      previewRules();
+    } catch (err) {
+      note.textContent = err.message;
+    }
+    $("rules-link-go").disabled = false;
   }
 
   async function uploadLogo(file) {
@@ -321,9 +403,16 @@
     const rows = [];
     rep.applied.forEach((a) => rows.push(el("div", { className: `rule rule--${a.kind}` },
       el("b", { textContent: a.kind === "filter" ? "Enforced" : "Setting" }), el("span", { textContent: a.meaning }))));
-    rep.advisory.forEach((line) => rows.push(el("div", { className: "rule rule--advisory" },
+    const advisoryRow = (line) => el("div", { className: "rule rule--advisory" },
       el("b", { textContent: "Not enforced" }),
-      el("span", { textContent: `“${line}” can't be checked automatically. Quillcut will still ask the local model for an opinion on each reel.` }))));
+      el("span", { textContent: `“${line}” can't be checked automatically.` }));
+    if (rep.advisory.length <= 4) {
+      rep.advisory.forEach((line) => rows.push(advisoryRow(line)));
+    } else {
+      rows.push(el("details", { className: "rule rule--advisory rule--many" },
+        el("summary", { textContent: `${rep.advisory.length} other lines can't be checked automatically (descriptions, tips, questions). Show them` }),
+        el("div", { className: "rule__list" }, rep.advisory.map((line) => el("p", { textContent: line })))));
+    }
     if (res.capacity && rep.filters) {
       state.rulesCapacity = res.capacity.capacity;
       rows.push(el("div", { className: "rule rule--count" },
@@ -347,17 +436,24 @@
       }
     }, 500);
   }
-  function loadRulesFile(file) {
+  async function loadRulesFile(file) {
     if (!file) return;
-    if (file.size > 65536) return toast("That file is too large for rules (64 KB max).");
-    const reader = new FileReader();
-    reader.onload = () => {
-      $("rules").value = String(reader.result).slice(0, 4000);
-      if (String(reader.result).length > 4000) toast("Only the first 4000 characters were used.");
+    const note = $("rules-state");
+    if (file.size > 20 * 1024 * 1024) { note.textContent = "That document is larger than 20 MB."; return; }
+    note.textContent = `Reading ${file.name}…`;
+    try {
+      // Word, PDF and web pages are read on the server; the text comes back here
+      const res = await fetch("/api/upload?kind=rules&name=" + encodeURIComponent(file.name), { method: "POST", body: file });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "That document could not be read.");
+      $("rules").value = data.text;
+      note.textContent = `Loaded ${data.chars.toLocaleString()} characters from ${file.name}.`;
       paintPreview();
       previewRules();
-    };
-    reader.readAsText(file);
+    } catch (err) {
+      note.textContent = err.message;
+    }
+    $("rules-file").value = "";
   }
 
   /* ---------- analysis ---------- */
@@ -709,6 +805,10 @@
     $("rights-ok").addEventListener("change", refreshGo);
     $("rights").addEventListener("change", paintPreview);
     $("rules").addEventListener("input", () => { paintPreview(); previewRules(); });
+    $("video-link-go").addEventListener("click", getVideoFromLink);
+    $("video-link").addEventListener("keydown", (e) => { if (e.key === "Enter") getVideoFromLink(); });
+    $("rules-link-go").addEventListener("click", getRulesFromLink);
+    $("rules-link").addEventListener("keydown", (e) => { if (e.key === "Enter") getRulesFromLink(); });
     $("rules-file").addEventListener("change", (e) => loadRulesFile(e.target.files[0]));
     $("rules-clear").addEventListener("click", () => { $("rules").value = ""; paintPreview(); previewRules(); });
     previewRules();

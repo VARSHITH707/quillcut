@@ -59,6 +59,15 @@
               <button type="button" class="link" id="file-remove" hidden>Use a different video</button>
             </div>
           </div>
+          <div class="link-in" id="video-link-box">
+            <label for="video-link">or paste a link</label>
+            <div class="link-in__row">
+              <input type="url" id="video-link" placeholder="YouTube, Google Drive file or folder, TikTok, Instagram, Vimeo, or a direct link">
+              <button type="button" class="mini mini--solid" id="video-link-go">Get video</button>
+            </div>
+            <p class="hint" id="video-link-state"></p>
+            <ul class="pick" id="video-pick" hidden></ul>
+          </div>
           <p class="error" id="upload-error" role="alert" hidden></p>
 
           <div class="analysis" id="analysis" hidden aria-live="polite">
@@ -73,12 +82,17 @@
           <div class="rules" id="rules-box">
             <label for="rules"><b>Rules</b> <span class="optional">optional</span></label>
             <p class="hint">Tell Quillcut what every reel must follow, one rule per line. It works fine without any. A video is always required.</p>
-            <textarea id="rules" rows="5" maxlength="4000" placeholder="Only clips about pricing&#10;Never mention competitors&#10;No profanity&#10;No longer than 45 seconds&#10;High energy"></textarea>
+            <textarea id="rules" rows="5" maxlength="20000" placeholder="Only clips about pricing&#10;Never mention competitors&#10;No profanity&#10;No longer than 45 seconds&#10;High energy"></textarea>
             <div class="rules__row">
-              <label class="mini" for="rules-file">Load rules from a file</label>
-              <input type="file" id="rules-file" accept=".txt,.md,text/plain" hidden>
+              <label class="mini" for="rules-file">Load a document</label>
+              <input type="file" id="rules-file" accept=".txt,.md,.docx,.pdf,.html,.htm" hidden>
               <button type="button" class="link" id="rules-clear" hidden>Clear rules</button>
             </div>
+            <div class="link-in__row">
+              <input type="url" id="rules-link" placeholder="or paste a link: Google Doc, Drive file (Word or PDF), or a web page" aria-label="Rules link">
+              <button type="button" class="mini" id="rules-link-go">Get rules</button>
+            </div>
+            <p class="hint" id="rules-state"></p>
             <div class="rules__report" id="rules-report" aria-live="polite"></div>
           </div>
         </article>

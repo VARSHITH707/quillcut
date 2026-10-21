@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-MAX_RULE_CHARS = 4000
+MAX_RULE_CHARS = 20000          # room for a whole campaign brief pasted or loaded from a document
 MIN_RULE_SECONDS, MAX_RULE_SECONDS = 5.0, 180.0
 
 PROFANITY = {"fuck", "fucking", "fucked", "shit", "bullshit", "shitty", "bitch", "asshole", "bastard", "damn",
@@ -27,15 +27,27 @@ def _seconds(value: str, unit: str) -> float:
     return n * 60 if unit.lower().startswith("m") else n
 
 
+TERM_STOP = {"it", "its", "them", "they", "this", "that", "these", "those", "him", "her", "he", "she", "you", "your",
+              "we", "us", "our", "i", "me", "my", "is", "are", "was", "be", "been", "being", "get", "gets", "got",
+              "make", "makes", "made", "do", "does", "did", "have", "has", "had", "go", "goes", "use", "using", "used",
+              "post", "posted", "approved", "will", "can", "should", "would", "could", "fast", "slow", "anything",
+              "everything", "something", "nothing", "here", "there", "now", "then", "too", "also", "just", "really"}
+
+
 def _terms(text: str, limit: int = 8) -> list[str]:
-    """'pricing, our competitors and Acme Corp' -> ['pricing', 'competitors', 'acme corp']."""
+    """'pricing, our competitors and Acme Corp' -> ['pricing', 'competitors', 'acme corp'].
+
+    Only short noun phrases survive: a fragment that contains a verb or a pronoun ("skip it", "your clips get
+    approved") is not a topic, so it is dropped instead of becoming a filter that blocks every clip."""
     text = re.sub(r"[\"“”‘’]", "", text)
-    text = re.sub(r"[.!?]+$", "", text.strip())
+    text = re.sub(r"[.!?:]+.*$", "", text.strip())            # one clause only
     out: list[str] = []
     for part in re.split(r",|/|;|\band\b|\bor\b|\bplus\b", text, flags=re.I):
         words = [w for w in re.findall(r"[A-Za-z0-9][A-Za-z0-9'\-]*", part) if w.lower() not in FILLER_WORDS]
-        term = " ".join(words[:4]).lower()
-        if term and term not in out:
+        if not words or len(words) > 4 or any(w.lower() in TERM_STOP for w in words):
+            continue
+        term = " ".join(words).lower()
+        if len(term) >= 3 and term not in out:
             out.append(term)
     return out[:limit]
 
@@ -108,6 +120,12 @@ class Rules:
                         "detail": f"{duration:.0f}s"})
         return out
 
+    def key_advisory(self, limit: int = 12) -> list[str]:
+        """The unenforced lines worth asking the model about: instructions, not headings or descriptions."""
+        cue = re.compile(r"\b(must|never|don'?t|do not|avoid|keep|always|only|no|make sure|should)\b", re.I)
+        picked = [line for line in self.advisory if cue.search(line) and 3 <= len(line.split()) <= 40]
+        return picked[:limit]
+
     def report(self) -> dict:
         """What the page shows: what was understood and enforced, and what was not."""
         return {"applied": self.applied, "advisory": self.advisory, "filters": self.filters}
@@ -115,12 +133,20 @@ class Rules:
 
 # --------------------------------------------------------------------------------------------- parsing
 
+NEGATIVE_MARKS = "✕✖❌✗"        # ✕ ✖ ❌ ✗: a "don't do this" list item
+
+
 def _statements(text: str) -> list[str]:
-    parts = re.split(r"[\r\n]+|;|(?<=[.!?])\s+(?=[A-Z0-9])", text)
     out = []
-    for p in parts:
-        p = re.sub(r"^\s*(?:[-*•]+|\d+[.)])\s*", "", p).strip()
-        if p:
+    for line in re.split(r"[\r\n]+", text):
+        line = line.strip()
+        negative = line[:1] in NEGATIVE_MARKS
+        for i, p in enumerate(re.split(r";|(?<=[.!?])\s+(?=[A-Z0-9])", line)):
+            p = re.sub(r"^\s*(?:[-*•]+|\d+[.)])\s*", "", p).strip()
+            if not p:
+                continue
+            if negative and p[:1] not in NEGATIVE_MARKS:
+                p = "✕ " + p            # every sentence of a ✕ item keeps its "don't"
             out.append(p)
     return out
 
@@ -128,15 +154,27 @@ def _statements(text: str) -> list[str]:
 def parse(text: str | None) -> Rules:
     """Read free-text rules. Never raises; anything it cannot enforce lands in `advisory`."""
     rules = Rules(text=(text or "").strip()[:MAX_RULE_CHARS])
+    seen: set[str] = set()
     for raw in _statements(rules.text):
         s = raw.strip()
         low = s.lower()
         done = False
+        if s.endswith("?") or re.match(r"^q\b", low):
+            rules.advisory.append(raw)            # a question (FAQ) is not an instruction
+            continue
+        negative = bool(re.match(r"^\s*[✕✖❌✗x]\s", s))     # "✕ Loud meme edits ..."
 
         def note(meaning: str, kind: str) -> None:
             nonlocal done
-            rules.applied.append({"rule": raw, "meaning": meaning, "kind": kind})
             done = True
+            if meaning in seen:
+                return
+            seen.add(meaning)
+            rules.applied.append({"rule": raw, "meaning": meaning, "kind": kind})
+
+        if negative and re.search(r"\bzoom[- ]?punch\w*|\bpunch[- ]?ins?\b|\bzoom punches\b", low):
+            rules.intensity = "clean"
+            note("Clean editing: no punch-in zooms.", "setting")
 
         # --- language and safety
         if re.search(r"\b(no|without|avoid|never|don'?t|do not)\b.*\b(profanity|swear\w*|curs\w+|bad words|expletives?|"
@@ -145,10 +183,11 @@ def parse(text: str | None) -> Rules:
             note("Moments containing profanity are never chosen.", "filter")
 
         # --- settings
-        if re.search(r"\b(no|without|don'?t use|do not use)\b.{0,12}\bmusic\b", low):
+        # settings count only as instructions that lead the sentence ("No music"), not as words in a description
+        if re.match(r"^\s*(no|without|don'?t use|do not use|avoid)\b.{0,20}\bmusic\b", low):
             rules.music = "none"
             note("No background music.", "setting")
-        elif re.search(r"\b(with|add|include|use|put)\b.{0,40}\bmusic\b", low):
+        elif re.match(r"^\s*(add|use|include|put|with|always use)\b.{0,40}\bmusic\b", low):
             rules.music = "subtle"
             note("Subtle background music.", "setting")
         opens_on = re.search(r"\b(?:start|open|begin)\w*\b", low) is not None        # a hook rule, not this one

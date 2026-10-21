@@ -30,7 +30,8 @@ from .. import rules as rules_mod
 from ..config import load_config, load_yaml
 from ..formats import list_formats
 from ..paths import CLIPPING, FORMATS
-from . import copywriter, reels_job
+from .. import inputs
+from . import copywriter, fetch_job, reels_job
 
 log = logging.getLogger("quillcut.web")
 
@@ -188,6 +189,18 @@ def run_job(job_id: str) -> None:
                  error="Something went wrong while making the reels. Check the terminal for details.")
 
 
+def run_fetch_job(job_id: str) -> None:
+    """Link downloads run on their own thread: they use the network, not the graphics card."""
+    s = store()
+    job = s.update(job_id, status="running", stage="downloading", started=time.time())
+    try:
+        fetch_job.run_fetch(job, lambda **f: s.update(job_id, **f), UPLOADS, MAX_UPLOAD)
+    except Exception:  # noqa: BLE001
+        log.exception("fetch %s failed", job_id)
+        s.update(job_id, status="failed", error="The download failed. Check the terminal for details.")
+    s.update(job_id, finished=time.time())
+
+
 def run_auto_job(job_id: str) -> None:
     s = store()
     job = s.update(job_id, status="running", stage="starting", started=time.time())
@@ -268,7 +281,8 @@ def ollama_state() -> dict:
 def job_view(job: dict) -> dict:
     view = {k: job.get(k) for k in ("id", "kind", "filename", "status", "stage", "done", "total", "error", "note",
                                       "created", "started", "finished", "options", "analysis", "capacity",
-                                      "speakers", "messages", "rules_report", "rule_notes")}
+                                      "speakers", "messages", "rules_report", "rule_notes", "url", "uploads",
+                                      "photos", "problems", "progress_text")}
     if view.get("analysis"):                       # the stored candidate texts are for the rules preview only
         view["analysis"] = {k: v for k, v in view["analysis"].items() if k != "candidates"}
     clips = []
@@ -353,8 +367,14 @@ class Handler(BaseHTTPRequestHandler):
         if length > 65536:
             raise ApiError(413, "Request too large.")
         self._body_done = True
+        raw = self.rfile.read(length) or b"{}"
         try:
-            data = json.loads(self.rfile.read(length) or b"{}")
+            data = json.loads(raw)
+        except UnicodeDecodeError:                  # some Windows tools send cp1252 instead of UTF-8
+            try:
+                data = json.loads(raw.decode("cp1252"))
+            except ValueError:
+                raise ApiError(400, "That request was not valid JSON.") from None
         except ValueError:
             raise ApiError(400, "That request was not valid JSON.") from None
         if not isinstance(data, dict):
@@ -411,6 +431,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._create_job()
         if method == "POST" and path == "/api/rules/preview":
             return self._rules_preview()
+        if method == "POST" and path == "/api/inputs/link":
+            return self._link_input()
         if method == "GET" and path == "/api/jobs":
             return self._json({"jobs": [job_view(j) for j in s.all()]})
         m = re.fullmatch(r"/api/jobs/([0-9a-f]{12})(/zip)?", path)
@@ -435,8 +457,10 @@ class Handler(BaseHTTPRequestHandler):
 
     def _upload(self, query: dict) -> None:
         name = safe_name((query.get("name") or [""])[0])
-        is_logo = (query.get("kind") or [""])[0] == "logo"
-        allowed = IMAGE_EXT if is_logo else VIDEO_EXT
+        kind = (query.get("kind") or [""])[0]
+        is_logo = kind == "logo"
+        is_rules = kind == "rules"
+        allowed = IMAGE_EXT if is_logo else inputs.DOC_EXT if is_rules else VIDEO_EXT
         if Path(name).suffix.lower() not in allowed:
             raise ApiError(415, f"Use one of: {', '.join(sorted(allowed))}")
         try:
@@ -445,10 +469,11 @@ class Handler(BaseHTTPRequestHandler):
             raise ApiError(411, "The upload size is missing.") from None
         if length <= 0:
             raise ApiError(400, "That file is empty.")
-        limit = 10 * 1024 ** 2 if is_logo else MAX_UPLOAD
+        limit = 10 * 1024 ** 2 if is_logo else inputs.MAX_DOC_BYTES if is_rules else MAX_UPLOAD
         if length > limit:
-            raise ApiError(413, f"That file is larger than {limit / 1024 ** 3:.0f} GB." if not is_logo
-                           else "A logo must be smaller than 10 MB.")
+            raise ApiError(413, "A logo must be smaller than 10 MB." if is_logo else
+                           "A rules document must be smaller than 20 MB." if is_rules else
+                           f"That file is larger than {limit / 1024 ** 3:.0f} GB.")
         upload_id = uuid.uuid4().hex[:12]
         folder = UPLOADS / upload_id
         folder.mkdir(parents=True)
@@ -463,6 +488,15 @@ class Handler(BaseHTTPRequestHandler):
                         raise ApiError(400, "The upload was interrupted.")
                     fh.write(chunk)
                     remaining -= len(chunk)
+            if is_rules:                                  # read the text, keep nothing on disk
+                try:
+                    text = inputs.file_to_text(target)
+                except inputs.InputError as exc:
+                    raise ApiError(422, str(exc)) from None
+                shutil.rmtree(folder, ignore_errors=True)
+                if not text.strip():
+                    raise ApiError(422, "That document has no text.")
+                return self._json({"kind": "rules", "name": name, "text": text, "chars": len(text)}, 201)
             if is_logo:
                 from PIL import Image
                 try:
@@ -485,6 +519,36 @@ class Handler(BaseHTTPRequestHandler):
         warning = ("Low resolution: reels will look soft. 720p or higher works best." if short < 720 else None)
         self._json({"upload_id": upload_id, "name": name, "size": length, "duration": round(info["duration"], 1),
                     "width": info["width"], "height": info["height"], "warning": warning}, 201)
+
+    def _link_input(self) -> None:
+        """A pasted link. role "rules" returns the text straight away; role "video" starts a download job."""
+        body = self._read_json()
+        url, role = str(body.get("url") or "").strip(), body.get("role")
+        if role not in ("video", "rules"):
+            raise ApiError(400, "Say whether the link is for the video or the rules.")
+        if not url or len(url) > 2000:
+            raise ApiError(400, "Paste a link first.")
+        if role == "rules":
+            work = UPLOADS / f"rules-{uuid.uuid4().hex[:12]}"
+            try:
+                text, source = inputs.fetch_rules_text(url, work)
+            except inputs.InputError as exc:
+                raise ApiError(422, str(exc)) from None
+            finally:
+                shutil.rmtree(work, ignore_errors=True)
+            if not text.strip():
+                raise ApiError(422, "That document has no text.")
+            return self._json({"text": text, "source": source, "chars": len(text)})
+        try:
+            inputs.check_url(url)
+        except inputs.InputError as exc:
+            raise ApiError(422, str(exc)) from None
+        job_id = uuid.uuid4().hex[:12]
+        job = {"id": job_id, "kind": "fetch", "url": url, "status": "queued", "stage": "queued",
+               "progress_text": "Starting the download", "created": time.time()}
+        store().add(job)
+        threading.Thread(target=run_fetch_job, args=(job_id,), daemon=True, name=f"fetch-{job_id}").start()
+        self._json(job_view(job), 201)
 
     def _rules_preview(self) -> None:
         """What the rules mean, before anything runs. Needs no video; with an analysis it also shows how many

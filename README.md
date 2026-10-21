@@ -90,6 +90,22 @@ passed**, an editable **caption and hashtags**, and download buttons. Two button
   you are told how long the answer needs, instead of cutting it off.
 * A 90-second answer that is longer than the maximum ends at a paragraph boundary and is marked as a part.
 
+## Inputs from anywhere
+
+| Input | Upload a file | Or paste a link |
+|---|---|---|
+| **Video** (required) | MP4, MOV, MKV, WEBM, M4V, AVI | YouTube, TikTok, Instagram, Vimeo, X and other video sites; a Google Drive file; a Google Drive **folder** (you pick which video); a direct link to a video file |
+| **Rules** (optional) | .txt, .md, **.docx (Word)**, **.pdf**, .html | A **Google Doc**; a Word or PDF file on Google Drive; any web page |
+| **Photos** | PNG, JPG, WEBP (as the logo) | Photos inside a shared Drive folder are collected too |
+
+Links must work without signing in: on Google Drive and Docs that means sharing set to *Anyone with the link*.
+When a link can't be used, the app says why in plain words: the file is private, Google's download quota for a
+popular file is exhausted ("try again later or download it yourself"), the link is a web page rather than a
+file, or the video is private. Links to private or local network addresses are refused.
+
+Not yet: photos are not mixed into the edit (only used as a logo), and private Google Drive files would need
+your Google account connected, which the app does not do.
+
 ## Two inputs: a video (required) and rules (optional)
 
 Quillcut never runs without a **video**. Rules are optional: with no rules it behaves exactly as described

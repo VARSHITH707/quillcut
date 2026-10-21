@@ -83,7 +83,7 @@ def test_unenforceable_lines_are_reported_not_silently_followed():
 
 
 def test_rules_text_is_capped():
-    assert len(R.parse("x" * 10000).text) == R.MAX_RULE_CHARS
+    assert len(R.parse("x" * 50000).text) == R.MAX_RULE_CHARS
 
 
 def test_rules_override_page_settings_and_say_so():
