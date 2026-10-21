@@ -234,3 +234,10 @@ def test_pads_stay_inside_the_gaps():
     start, stop = cv.pads(sentences, 1, 1, 100.0)
     assert start >= sentences[0].end
     assert stop >= sentences[1].end
+
+
+def test_a_clip_far_shorter_than_its_target_scores_low_on_fit():
+    # a 12 s fragment for a 45 s reel must not win on a strong first line alone
+    assert cv.fit_score(12.2, 45.0, 60.0) < 0.2
+    assert cv.fit_score(40.0, 45.0, 60.0) > 0.85
+    assert cv.fit_score(5.0, 45.0, 60.0) == 0.0

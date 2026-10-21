@@ -476,7 +476,8 @@ def content_starts_dependent(s: Sentence) -> bool:
 
 def fit_score(duration: float, target: float, hard_max: float) -> float:
     if duration <= target:
-        return 1.0 - 0.8 * (target - duration) / max(target, 1.0)
+        # steep enough that a strong opening line alone can't carry a clip a quarter of the asked length
+        return max(0.0, 1.0 - 1.2 * (target - duration) / max(target, 1.0))
     return max(0.0, 1.0 - 0.7 * (duration - target) / max(hard_max - target, 1.0))
 
 
