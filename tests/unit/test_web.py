@@ -388,6 +388,40 @@ def test_regeneration_passes_exclude_and_prefer_ranges(app, monkeypatch):
     assert seen["exclude"] == [(10.0, 52.0)] and seen["prefer"] == (60.0, 100.0)
 
 
+def test_music_and_mixed_footage_reach_the_plan(app, monkeypatch):
+    port, tmp = app
+    from PIL import Image
+    import io as _io
+    from test_beats import drum_track
+    drum_track(100, 20, tmp / "song.wav")
+    status, _, data = call(port, "POST", "/api/upload?kind=music&name=song.wav", (tmp / "song.wav").read_bytes())
+    music = as_json(data)
+    assert status == 201 and abs(music["bpm"] - 100) <= 2
+    buf = _io.BytesIO()
+    Image.new("RGB", (400, 500), (180, 150, 120)).save(buf, "PNG")
+    status, _, data = call(port, "POST", "/api/upload?kind=mix&name=ad.png", buf.getvalue())
+    photo = as_json(data)
+    assert status == 201 and photo["photo"] is True
+    assert call(port, "POST", "/api/upload?kind=music&name=song.exe", b"MZ" * 50)[0] == 415
+    assert call(port, "POST", "/api/upload?kind=music&name=noise.wav", b"RIFF" + b"\x00" * 400)[0] == 422
+
+    seen: dict = {}
+    monkeypatch.setattr(conversation_job, "run", _fake_run(tmp, seen))
+    up = as_json(upload(port)[2])
+    body = {**REELS, "upload_id": up["upload_id"], "grade": "hazy", "beat_cuts": True,
+            "music_upload": music["upload_id"], "mix_uploads": [photo["upload_id"]], "mix_amount": "medium",
+            "rules": "Think catalog typography, not meme font."}
+    job = wait_for(port, as_json(call(port, "POST", "/api/jobs", body)[2])["id"])
+    assert job["status"] == "done", job
+    o = seen["options"]
+    assert o.grade == "hazy" and o.beat_cuts and o.mix_amount == "medium" and o.accent is None
+    assert abs(o.music["beats"]["bpm"] - 100) <= 2 and o.music["file"].endswith("song.wav")
+    assert [k for k, _ in o.mix] == ["m0"] and o.mix[0][1].still
+    gone = {**body, "mix_uploads": ["0123456789ab"]}
+    status, _, data = call(port, "POST", "/api/jobs", gone)
+    assert status == 400 and "mixed-footage" in as_json(data)["error"]
+
+
 def test_logo_upload_accepts_images_only(app):
     port, _ = app
     from PIL import Image

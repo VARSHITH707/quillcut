@@ -81,7 +81,8 @@ def _balance(lines: list[list[str]], font: dict, size: int, stroke: int, max_w: 
 
 def layout_text(text: str, block: dict, style: dict, safe: dict):
     """Return (lines, font_spec, size, pos, bbox_norm) or None when it cannot fit."""
-    font = style["fonts"][script_of(text)]
+    script = script_of(text)
+    font = block.get("font") if script == "latin" and block.get("font") else style["fonts"][script]
     stroke = style["stroke_px"]
     words = text.split()
     cw, ch = canvas_of(style)
@@ -232,9 +233,15 @@ def _escape(text: str) -> str:
     return text.replace("\\", "/").replace("{", "(").replace("}", ")")
 
 
+def _font_spec(family: str, style: dict) -> dict | None:
+    """The font entry for a family: style-wide fonts first, then per-block overrides (e.g. a serif title)."""
+    specs = list(style["fonts"].values()) + [b["font"] for b in style.values() if isinstance(b, dict) and "font" in b]
+    return next((f for f in specs if f.get("family") == family), None)
+
+
 def _ass_size(card: TextCard, style: dict) -> int:
     """libass sizes text by line height (ascent + descent); layout measured em size with PIL."""
-    font = next((f for f in style["fonts"].values() if f["family"] == card.font), None)
+    font = _font_spec(card.font, style)
     if font is None:
         return card.font_size
     ascent, descent = _pil_font(font["file"], font.get("index", 0), card.font_size).getmetrics()
@@ -271,10 +278,14 @@ def build_ass(cards: list[TextCard], style: dict) -> str:
         f"{style['stroke_px']},{style['shadow_px']},5,0,0,0,1\n\n[Events]\n"
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n")
     events = []
-    pop = "\\fscx92\\fscy92\\t(0,120,\\fscx100\\fscy100)"
-    title_pop = "\\fad(110,180)\\fscx72\\fscy72\\t(0,200,\\fscx106\\fscy106)\\t(200,330,\\fscx100\\fscy100)"
+    subtle = style.get("motion") == "subtle"           # catalog look: fades, no bounce
+    pop = "" if subtle else "\\fscx92\\fscy92\\t(0,120,\\fscx100\\fscy100)"
+    title_pop = ("\\fad(320,320)" if subtle else
+                 "\\fad(110,180)\\fscx72\\fscy72\\t(0,200,\\fscx106\\fscy106)\\t(200,330,\\fscx100\\fscy100)")
+    bar_h = 3 if subtle else 12
     for card in cards:
-        bold = "\\b1" if card.font != latin else ""
+        spec = _font_spec(card.font, style)
+        bold = "\\b1" if (spec or {}).get("bold") else ""
         size = _ass_size(card, style)
         prefix = f"\\pos({card.pos[0]},{card.pos[1]})\\fn{card.font}\\fs{size}{bold}"
         t0, t1 = _ass_time(card.start), _ass_time(card.end)
@@ -284,8 +295,8 @@ def build_ass(cards: list[TextCard], style: dict) -> str:
 
         if card.kind == "hook":
             bar_w = x1 - x0
-            events.append(_drawing(0, card.start, card.end, x0, y1 + 12, _rect(0, 0, bar_w, 12), accent,
-                                   anim="\\fscx0\\fad(0,180)\\t(120,520,\\fscx100)"))
+            events.append(_drawing(0, card.start, card.end, x0, y1 + 12, _rect(0, 0, bar_w, bar_h), accent,
+                                   anim="\\fad(320,320)" if subtle else "\\fscx0\\fad(0,180)\\t(120,520,\\fscx100)"))
             events.append(f"Dialogue: 1,{t0},{t1},Q,,0,0,0,,{{{prefix}{title_pop}}}{text}")
             continue
         if card.kind == "lower_third":

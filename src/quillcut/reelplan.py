@@ -11,6 +11,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import beats
 from . import conversation as cv
 from .captions import callout_card, cta_card, hook_card, lower_third_card, speech_cards
 from .types import AudioPlan, EditPlan, MusicBed, OutputSpec, Segment, SourceRef
@@ -35,6 +36,9 @@ CAPTION_MAX_WORDS = 5     # 3-5 words per caption card
 CAPTION_Y = 0.60          # speech captions sit in the centre third of the frame (35%-65%)
 CAPTION_BAND = (0.35, 0.65)
 CALLOUT_Y = 0.45          # above the captions, still inside the safe area
+MIX_SHARE = {"light": 0.20, "medium": 0.33}   # most of the reel the speaker owns the picture
+CUTAWAY_SPAN = (0.8, 3.5)  # a cutaway shorter than this flickers, longer loses the speaker
+PHOTO_PUSH = 0.06          # slow push-in on photos so a still never looks frozen
 
 
 @dataclass
@@ -46,11 +50,15 @@ class PlanOptions:
     cta: str | None = None
     denoise: bool = True
     music: dict | None = None          # {"file": ..., "licence": ..., "level_db": ...}
-    accent: str = "F85830"
+    accent: str | None = "F85830"
     show_question_label: bool = True
     logo: str | None = None            # path to a brand image shown on every frame
     caption_y: float | None = None     # caption centre as a fraction of height; kept inside 0.35-0.65
     hook_style: str | None = None      # from the user's rules: "question" | "cold_open" | "opening"
+    grade: str | None = None           # looks.GRADES key
+    beat_cuts: bool = False            # cut on the music's beats (needs music with analysed beats)
+    mix: list | None = None            # [(source key, SourceRef)] cutaway footage and photos
+    mix_amount: str = "light"          # "light" | "medium"
 
 
 @dataclass
@@ -134,6 +142,72 @@ def split_by_velocity(interval: tuple[float, float], words: list[dict],
         cur = nxt
     pieces.append((cur, b))
     return pieces
+
+
+def beat_shots(intervals: list[tuple[float, float]], words: list[dict], track: beats.Track,
+               cut: tuple[float, float], no_cut_before: float) -> tuple[list[tuple[float, float]], dict]:
+    """Split the kept intervals on the music's beats. Times go clip -> source through the interval layout;
+    a stretch the beats leave longer than 1.6x the cadence gets an off-beat cut between words."""
+    starts, t = [], 0.0
+    for a, b in intervals:
+        starts.append(t)
+        t += b - a
+    duration = t
+    probe = [Segment(id="p", source="a", src_in=a, src_out=b) for a, b in intervals]
+    info = beats.align(track, map_words(probe, words), duration, cut, no_cut_before=no_cut_before)
+    shots = []
+    for (a, b), s0 in zip(intervals, starts):
+        inner = [a + (c - s0) for c in info["cuts"] if s0 + 0.1 < c < s0 + (b - a) - 0.1]
+        bounds = [a, *inner, b]
+        for p, q in zip(bounds, bounds[1:]):
+            keep = q - p <= 1.6 * cut[1] or s0 + (q - a) <= no_cut_before + 1e-6   # e.g. the cold open
+            shots += [(p, q)] if keep else split_by_velocity((p, q), words, cut)
+    return shots, info
+
+
+def snap_shots(shots: list[tuple[float, float]], fps: float) -> list[tuple[float, float]]:
+    # ponytail: rounding moves a boundary by at most half a frame (~17 ms at 30 fps), well inside word gaps
+    out = [(beats.frame_snap(a, fps), beats.frame_snap(b, fps)) for a, b in shots]
+    return [(a, b) for a, b in out if b - a >= 0.1]
+
+
+def add_cutaways(segments: list[Segment], mix: dict[str, SourceRef], share: float,
+                 strongest: cv.Sentence | None, *, skip_first: bool) -> list[Segment]:
+    """Swap the picture of some shots for the user's footage or photos; the sound stays the speaker's.
+
+    Never inside the hook seconds, never the strongest line, never two in a row, never more than `share`
+    of the reel. Files take turns; a video starts at a different place each time it comes back."""
+    total = sum(s.out_duration for s in segments)
+    keys = sorted(mix)
+    out, used, t, prev_cut, n = [], 0.0, 0.0, False, 0
+    for i, seg in enumerate(segments):
+        d = seg.out_duration
+        ok = (not prev_cut and t >= HOOK_SECONDS and not (skip_first and i == 0)
+              and CUTAWAY_SPAN[0] <= d <= CUTAWAY_SPAN[1] and used + d <= share * total + 1e-6
+              and i < len(segments) - 1                          # the last shot stays on the speaker
+              and not (strongest is not None and seg.src_in <= strongest.start < seg.src_out))
+        if ok:
+            key = keys[n % len(keys)]
+            asset = mix[key]
+            room = max(0.0, asset.duration - d - 0.1)
+            v_in = 0.0 if asset.still or room == 0 else round((n // len(keys)) * 7.0 % room, 3)
+            if asset.still or asset.duration >= d + 0.05:
+                landscape = asset.content_box[0] > asset.content_box[1]
+                seg = seg.model_copy(update={
+                    "video_source": key, "video_in": v_in, "zoom": 1.0, "crop_x": None,
+                    "layout": "fit_blur" if landscape and not asset.still else "center_crop",
+                    "push_in": PHOTO_PUSH if asset.still else 0.0,
+                    "rationale": f"cutaway to {Path(asset.path).name}; the speaker's audio continues"})
+                used += d
+                n += 1
+                prev_cut = True
+                out.append(seg)
+                t += d
+                continue
+        prev_cut = False
+        out.append(seg)
+        t += d
+    return out
 
 
 def hook_frames(text: str) -> list[str]:
@@ -270,7 +344,8 @@ def build(c: cv.Candidate, sentences: list[cv.Sentence], ref: SourceRef, cfg: di
     out_w, out_h = ASPECTS[options.aspect]
     safe = safe_for(options.aspect, cfg["safe_area"])
     st = {**style, "canvas": [out_w, out_h]}
-    st["colors"] = {**st["colors"], "accent": options.accent}
+    accent = options.accent or st["colors"].get("accent", "F85830")      # None keeps the style's own accent
+    st["colors"] = {**st["colors"], "accent": accent}
     notes: list[str] = []
 
     body = sentences[c.first:c.last + 1]
@@ -283,10 +358,23 @@ def build(c: cv.Candidate, sentences: list[cv.Sentence], ref: SourceRef, cfg: di
         hs: cv.Sentence = hook["sentence"]
         cold_seg = cv.pads(sentences, hs.idx, hs.idx, ref.duration)
 
-    shots: list[tuple[float, float]] = []
-    for interval in trim_pauses(words, c.start, c.end):
-        shots += split_by_velocity(interval, words, knobs["cut"])
-    all_shots = ([cold_seg] if cold_seg else []) + shots
+    intervals = ([cold_seg] if cold_seg else []) + trim_pauses(words, c.start, c.end)
+    track = beats.Track.from_dict(options.music["beats"]) if options.music and options.music.get("beats") else None
+    beat_info = None
+    if options.beat_cuts and track is not None:
+        # the cold open stays one shot: no beat cut before it ends
+        hold = max(HOOK_SECONDS, (cold_seg[1] - cold_seg[0]) if cold_seg else 0.0)
+        shots, beat_info = beat_shots(intervals, words, track, knobs["cut"], hold)
+        notes.append(f"Cut on the beat: {beat_info['beats_used']} cuts at {track.bpm:.0f} BPM, "
+                     f"{beat_info['on_beat']:.0%} within {beats.ON_BEAT_TOL * 1000:.0f} ms of a beat, "
+                     "each one between two words.")
+    else:
+        if options.beat_cuts:
+            notes.append("Cut on the beat needs a music track; cut on the speech rhythm instead.")
+        shots = [p for k, iv in enumerate(intervals)
+                 for p in ([iv] if cold_seg and k == 0 else split_by_velocity(iv, words, knobs["cut"]))]
+    # whole frames only, so every shot has exactly as much picture as sound and the joins stay seamless
+    all_shots = snap_shots(shots, beats.parse_fps(ref.fps))
 
     centers: list[float | None] = [None] * len(all_shots)
     if (options.reframe and layout in ("center_crop", "wide_fill") and ref.content_box[0] > ref.content_box[1]
@@ -301,9 +389,22 @@ def build(c: cv.Candidate, sentences: list[cv.Sentence], ref: SourceRef, cfg: di
         zoom = 1.0 if is_cold else knobs["zooms"][k % len(knobs["zooms"])]
         if strongest is not None and not is_cold and a <= strongest.start < b + 1e-6 and options.intensity != "clean":
             zoom = max(zoom, 1.14)
-        segments.append(Segment(id=f"s{n:02d}", source="a", src_in=round(a, 3), src_out=round(b, 3),
+        segments.append(Segment(id=f"s{n:02d}", source="a", src_in=a, src_out=b,
                                 layout=layout, zoom=zoom, crop_x=cx,
                                 rationale="cold-open hook line" if is_cold else f"conversation shot {k + 1}, zoom {zoom:g}"))
+    sources = {"a": ref}
+    if options.mix:
+        segments = add_cutaways(segments, dict(options.mix), MIX_SHARE[options.mix_amount], strongest,
+                                skip_first=cold_seg is not None)
+        cut_ins = [s for s in segments if s.video_source]
+        sources.update({s.video_source: dict(options.mix)[s.video_source] for s in cut_ins})
+        if cut_ins:
+            share = sum(s.out_duration for s in cut_ins) / sum(s.out_duration for s in segments)
+            notes.append(f"Mixed footage: {len(cut_ins)} cutaways from {len(sources) - 1} file(s), {share:.0%} "
+                         "of the reel; the speaker's voice keeps running under them.")
+        else:
+            notes.append("Mixed footage: no shot was a good fit for a cutaway in this reel (they skip the hook, "
+                         "the strongest line, and shots outside 0.8-3.5 s).")
     duration = round(sum(s.out_duration for s in segments), 3)
 
     # captions: centre third of the frame, 3-5 words per card
@@ -340,15 +441,16 @@ def build(c: cv.Candidate, sentences: list[cv.Sentence], ref: SourceRef, cfg: di
     audio = AudioPlan(target_lufs=cfg["audio"]["target_lufs"], true_peak_max=cfg["audio"]["true_peak_max"],
                       fade_out=0.25, denoise=options.denoise)
     if options.music and Path(options.music["file"]).exists():
+        offset = beat_info["offset"] if beat_info else (track.start if track else 0.0)
         audio.music = MusicBed(file=options.music["file"], licence=options.music.get("licence", "unknown"),
-                               start_offset=0.0, level_db=options.music.get("level_db", -14.0),
-                               duck_db=-22.0, duck=speech_spans(mapped))
+                               start_offset=offset, level_db=options.music.get("level_db", -14.0),
+                               duck_db=options.music.get("duck_db", -22.0), duck=speech_spans(mapped))
     elif options.music:
         notes.append("Background music was requested but no music track is installed; rendered without it.")
 
     plan = EditPlan(
         clip_id=clip_id, project_id=project_id, format_key=cfg["format"]["key"], mode="commentary",
-        script="conversation", sources={"a": ref}, rights=rights,
+        script="conversation", sources=sources, rights=rights, grade=options.grade,
         moment={"type": "conversation", "unit": c.unit, "start": c.start, "end": c.end,
                 "question_included": c.question_included, "partial": c.partial, "scores": c.scores,
                 "score": c.score, "reasons": c.reasons,
@@ -359,7 +461,7 @@ def build(c: cv.Candidate, sentences: list[cv.Sentence], ref: SourceRef, cfg: di
         output=OutputSpec(width=out_w, height=out_h, fps=ref.fps),
         logo=({"file": options.logo, "width": 0.20, "top": safe["top"] + 0.012}
               if options.logo and Path(options.logo).exists() else None),
-        progress_bar=options.accent if knobs["progress"] else None,
+        progress_bar=accent if knobs["progress"] else None,
         hard_floor_seconds=cv.MIN_ABSOLUTE_SECONDS - 2.0,
         rationale=[f"layout {layout}", f"intensity {options.intensity}", f"hook: {hook['kind']}"] + c.reasons)
     return Built(plan=plan, hook=hook, notes=notes)

@@ -1,0 +1,21 @@
+name: catalog
+case: natural               # luxury-catalog typography: serif, mixed case, no meme font
+motion: subtle              # fades instead of pops, a hairline instead of a bar
+fonts:
+  latin:      {family: "Georgia",    file: "C:/Windows/Fonts/georgia.ttf", index: 0, bold: false}
+  devanagari: {family: "Nirmala UI", file: "C:/Windows/Fonts/Nirmala.ttc", index: 0, bold: true}
+hook:                       # title in Bodoni, the classic fashion-catalog face
+  y: 0.24
+  size: 72
+  min_size: 46
+  max_lines: 2
+  font: {family: "Bodoni MT", file: "C:/Windows/Fonts/BOD_R.TTF", index: 0, bold: false}
+speech:
+  y: 0.60
+  size: 58
+  min_size: 44
+  max_lines: 2
+  words_per_card: 4
+colors: {base: "F4EFE6", active: "D8C3A0", stroke: "1A1712", accent: "C9B28A"}   # cream, champagne
+stroke_px: 2
+shadow_px: 2

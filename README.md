@@ -96,15 +96,16 @@ passed**, an editable **caption and hashtags**, and download buttons. Two button
 |---|---|---|
 | **Video** (required) | MP4, MOV, MKV, WEBM, M4V, AVI | YouTube, TikTok, Instagram, Vimeo, X and other video sites; a Google Drive file; a Google Drive **folder** (you pick which video); a direct link to a video file |
 | **Rules** (optional) | .txt, .md, **.docx (Word)**, **.pdf**, .html | A **Google Doc**; a Word or PDF file on Google Drive; any web page |
-| **Photos** | PNG, JPG, WEBP (as the logo) | Photos inside a shared Drive folder are collected too |
+| **Photos** | PNG, JPG, WEBP (as the logo or as mixed footage) | Photos inside a shared Drive folder are collected and added to mixed footage |
+| **Music** (optional) | MP3, WAV, M4A, AAC, FLAC, OGG | |
+| **Mixed footage** (optional) | Any video (no minimum length) or photo, up to 12 files | A Drive folder, a video site, or a direct file link |
 
 Links must work without signing in: on Google Drive and Docs that means sharing set to *Anyone with the link*.
 When a link can't be used, the app says why in plain words: the file is private, Google's download quota for a
 popular file is exhausted ("try again later or download it yourself"), the link is a web page rather than a
 file, or the video is private. Links to private or local network addresses are refused.
 
-Not yet: photos are not mixed into the edit (only used as a logo), and private Google Drive files would need
-your Google account connected, which the app does not do.
+Not yet: private Google Drive files would need your Google account connected, which the app does not do.
 
 ## Two inputs: a video (required) and rules (optional)
 
@@ -127,6 +128,9 @@ Write one rule per line, in plain words. These are **enforced**:
 | `Skip the interviewer's question` / `Keep the question` | Whether the question is in the video |
 | `Start with a question` / `No cold open` | How the hook is chosen |
 | `End with "Follow for more"` | Closing line |
+| `Cut on the beat` / `✕ off-beat cuts` | Cuts land on the music's beats |
+| `Elegant, dark, a little hazy` / `VHS textures` | Hazy or VHS colour grade |
+| `Catalog typography, not meme font` | Serif *Catalog* caption style |
 
 How rules are treated:
 
@@ -175,7 +179,18 @@ answer exceeds the maximum.
   *clean* every 3-4 s at 1.0x/1.05x; *dynamic* every 2-2.5 s at 1.0x/1.10x/1.14x with a callout;
   *high energy* every 1.2-1.8 s at 1.0x/1.12x/1.18x with two callouts and a progress bar.
 * **Captions:** 3-5 words per card, locked to the centre third of the frame (35%-65% of the height; 60% by
-  default), active word highlighted, bold type with a dark outline.
+  default), active word highlighted, bold type with a dark outline. The *Catalog* style swaps this for a
+  Bodoni title and Georgia captions in cream and champagne, with fades instead of pops.
+* **Cut on the beat:** with a music track, Quillcut finds its tempo and beats, slides the track against the reel
+  so as many beats as possible fall between two words, and cuts there. A beat that lands inside a word is
+  skipped, never forced, and the music starts at the matching point of the track. Every shot is a whole number
+  of frames.
+* **Look:** *Hazy* (lifted blacks, muted colour, soft glow, light grain, vignette), *Film* or *VHS*. The grade
+  covers footage and cutaways; captions are drawn on top so they stay crisp.
+* **Mixed footage:** your clips and photos (old ads, cartoons, game footage, textures) replace the picture for
+  one shot at a time while the speaker keeps talking. Never inside the hook seconds, never on the strongest
+  line, never two in a row, never the last shot, at most 20% (*light*) or 33% (*medium*) of the reel. Photos
+  get a slow push-in; landscape clips sit over a blurred fill.
 * **Post copy:** a re-hook under 10 words, 3-4 bullets taken from the speaker's own sentences, and a call to
   action by clip type (educational: "Save this guide for later.", opinion or debate: "Comment your thoughts
   below.", business: "Send this to a teammate."), plus hashtags.
@@ -214,7 +229,12 @@ quillcut doctor                               # check ffmpeg, GPU, fonts and mod
   footage. It falls back to a centred crop when no face is found.
 * **The language model is advisory.** A small local model is a noisy judge, so it can only veto a moment
   when a separate deterministic check also says the speaker is still on the same point.
-* **Music** needs a track on disk. Run `python tools/make_music.py` to generate royalty-free beds.
+* **Music** needs a track: upload your own in the app, or run `python tools/make_music.py` to generate
+  royalty-free beds. Beat tracking is tuned for music with a clear kick; very loose or beatless tracks give
+  fewer beat cuts. Clearing the rights to a track is up to you.
+* **Mixed footage is placed, not chosen by meaning:** cutaways go where the rules above allow, taking the files
+  in turn. Pick footage that fits the episode.
+* **Grain is capped** at 12 Mbps in the final file; platforms re-encode to far less anyway.
 * The video must contain **speech**. Gameplay without commentary has no conversation to clip.
 
 ## Project layout

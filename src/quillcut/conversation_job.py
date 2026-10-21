@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 
 from . import conversation as cv
-from . import jobs, media, reframe, reelplan, semantic, speakers
+from . import beats, jobs, media, reframe, reelplan, semantic, speakers
 from .config import load_config
 from .formats import load_style
 from .gpu import GpuLock
@@ -14,7 +14,8 @@ import dataclasses
 
 from .jobs import SourceRejected, merge_style, prepare, render_and_export
 from .rules import Rules
-from .storage import atomic_write_json, read_json
+from .storage import atomic_write_json, read_json, sha1_file
+from .types import SourceRef
 
 log = logging.getLogger("quillcut")
 SPEAKER_VERSION = "3"
@@ -176,6 +177,53 @@ def verify_render(video: Path, plan, cfg: dict, expected_words: list[str]) -> li
         log.warning("speech verification unavailable: %s", exc)
         add("speech_verification", False, "speech verification could not run", warn=True)
     return checks
+
+
+# --------------------------------------------------------------------------------------------- mixed footage
+
+STILL_SECONDS = 3600.0     # a photo can be shown for as long as a shot needs
+
+
+def mix_sources(paths: list[Path]) -> list[tuple[str, SourceRef]]:
+    """Cutaway files (videos or photos) as plan sources keyed m0, m1, ... A file that cannot be read is
+    skipped with a log line rather than failing the whole reel. (A photo is rendered at the reel's rate.)"""
+    from PIL import Image
+
+    from .inputs import IMAGE_EXT
+    out = []
+    for path in paths:
+        key = f"m{len(out)}"
+        try:
+            if path.suffix.lower() in IMAGE_EXT:
+                with Image.open(path) as im:
+                    w, h = im.size
+                ref = SourceRef(path=str(path), sha1=sha1_file(path), width=w, height=h, fps="30/1",
+                                duration=STILL_SECONDS, has_audio=False, content_box=(w - w % 2, h - h % 2, 0, 0),
+                                still=True)
+            else:
+                info = media.video_info(path)
+                box = media.detect_content_box(path, info["duration"], info["width"], info["height"])
+                ref = SourceRef(path=str(path), sha1=sha1_file(path), width=info["width"], height=info["height"],
+                                fps=info["fps"], duration=info["duration"], has_audio=info["has_audio"],
+                                content_box=box)
+        except (OSError, ValueError, media.MediaError) as exc:
+            log.warning("mixed footage %s skipped: %s", path.name, exc)
+            continue
+        out.append((key, ref))
+    return out
+
+
+def music_with_beats(path: Path, licence: str, level_db: float = -16.0) -> dict:
+    """A music bed with its beat map, cached next to the file as <name>.beats.json."""
+    cache = path.with_name(path.name + ".beats.json")
+    try:
+        data = read_json(cache)
+    except ValueError:                                  # a half-written cache is simply redone
+        data = None
+    if not data:
+        data = beats.analyse(path).as_dict()
+        atomic_write_json(cache, data)
+    return {"file": str(path), "licence": licence, "level_db": level_db, "beats": data}
 
 
 # --------------------------------------------------------------------------------------------- run

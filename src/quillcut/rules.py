@@ -70,6 +70,9 @@ class Rules:
     music: str | None = None
     cta: str | None = None
     hook_style: str | None = None          # "question" | "cold_open" | "opening"
+    beat_cuts: bool | None = None
+    grade: str | None = None               # looks.GRADES key
+    caption_style: str | None = None       # caption preset key
     applied: list[dict] = field(default_factory=list)      # {"rule", "meaning", "kind": "filter" | "setting"}
     advisory: list[str] = field(default_factory=list)      # lines that cannot be enforced automatically
 
@@ -221,6 +224,21 @@ def parse(text: str | None) -> Rules:
         elif re.search(r"\b(?:no|without|skip)\b.{0,6}\bcold open\b", low):
             rules.hook_style = "opening"
             note("Reels open on their own first line (no cold open).", "setting")
+        # --- look: "Cut on the beat", "✕ off-beat cuts", "a little hazy", "catalog typography, not meme font"
+        if re.search(r"\b(?:cut|edit)\w*\s+(?:on|to)\s+the\s+(?:beat|music|rhythm)\b", low) or \
+                (negative and re.search(r"\boff[- ]beat\b", low)):
+            rules.beat_cuts = True
+            note("Cuts land on the music's beats (with a music track).", "setting")
+        if not negative and re.search(r"\b(?:hazy|haze|dreamy|soft[- ]focus)\b", low):
+            rules.grade = "hazy"
+            note("Hazy colour grade: lifted blacks, soft glow, fine grain.", "setting")
+        elif not negative and rules.grade is None and re.search(r"\b(?:vhs|camcorder|tape look)\b", low):
+            rules.grade = "vhs"
+            note("VHS colour grade.", "setting")
+        if re.search(r"\bcatalog(?:ue)?\s+typography\b|\bnot\s+(?:a\s+)?meme\s+fonts?\b|\bserif\s+(?:captions|text|font)\b",
+                     low):
+            rules.caption_style = "catalog"
+            note("Catalog typography: serif, mixed case, fades instead of pops.", "setting")
         if re.search(r"\b(?:must|should|each|every)\b.{0,25}\b(?:number|statistic|stat|figure|data point)\b", low):
             rules.require_number = True
             note("Every reel must include a spoken number.", "filter")
@@ -283,12 +301,15 @@ def apply_to_options(rules: Rules, options: dict) -> list[str]:
     """Rules win over the page's settings. Returns plain-language notes for every setting a rule changed."""
     notes: list[str] = []
     mapping = {"intensity": "intensity", "aspect": "aspect", "music": "music", "cta": "cta",
-               "include_question": "include_question", "hook_style": "hook_style", "strict": "strict"}
+               "include_question": "include_question", "hook_style": "hook_style", "strict": "strict",
+               "beat_cuts": "beat_cuts", "grade": "grade", "caption_style": "preset"}
     for attr, key in mapping.items():
         value = getattr(rules, attr)
         if value is not None and options.get(key) != value:
             notes.append(f"Rule changed {key.replace('_', ' ')}: {options.get(key)} → {value}.")
             options[key] = value
+            if key == "preset":                  # the page's colours belong to the page's preset, not this one
+                options["style_from_rules"] = True
     if rules.target_seconds is not None:
         options["targets"] = [rules.target_seconds for _ in options["targets"]]
         notes.append(f"Rule set every reel's target to {rules.target_seconds:g}s.")

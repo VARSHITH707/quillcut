@@ -18,6 +18,7 @@ class SourceRef(BaseModel):
     duration: float
     has_audio: bool
     content_box: tuple[int, int, int, int]   # w, h, x, y after letterbox removal
+    still: bool = False                      # a photo used as a cutaway: looped for as long as it is shown
 
 
 class Segment(BaseModel):
@@ -130,6 +131,7 @@ class EditPlan(BaseModel):
     look: dict = Field(default_factory=dict)      # eq grade, e.g. {"contrast": 1.06}
     progress_bar: str | None = None               # bar colour hex, None = no bar
     logo: dict | None = None                      # persistent brand logo: {file, width (frame fraction), top (frame fraction)}
+    grade: str | None = None                      # colour grade from looks.GRADES, applied before captions
     hard_floor_seconds: float
     placeholders_used: list[str] = Field(default_factory=list)
     rationale: list[str] = Field(default_factory=list)

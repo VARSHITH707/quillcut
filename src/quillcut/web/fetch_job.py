@@ -8,10 +8,13 @@ from pathlib import Path
 from .. import inputs, media
 
 MIN_SECONDS = 20
+MIN_MIX_SECONDS = 1        # mixed footage is a cutaway, so a short clip is fine
 
 
 def run_fetch(job: dict, update, uploads_dir: Path, max_bytes: int) -> None:
-    """Download into a private scratch folder, then move each usable file into its own upload folder."""
+    """Download into a private scratch folder, then move each usable file into its own upload folder.
+    job["role"] == "mix" accepts short clips (cutaways); otherwise a video must be a full source."""
+    min_seconds = MIN_MIX_SECONDS if job.get("role") == "mix" else MIN_SECONDS
     scratch = uploads_dir / f"fetch-{job['id']}"
     shutil.rmtree(scratch, ignore_errors=True)
     try:
@@ -35,8 +38,8 @@ def run_fetch(job: dict, update, uploads_dir: Path, max_bytes: int) -> None:
                 problems.append(f"{target.name}: not a readable video")
                 shutil.rmtree(folder, ignore_errors=True)
                 continue
-            if info["duration"] < MIN_SECONDS:
-                problems.append(f"{target.name}: only {info['duration']:.0f} s long (needs {MIN_SECONDS} s)")
+            if info["duration"] < min_seconds:
+                problems.append(f"{target.name}: only {info['duration']:.0f} s long (needs {min_seconds} s)")
                 shutil.rmtree(folder, ignore_errors=True)
                 continue
             short = min(info["width"], info["height"])

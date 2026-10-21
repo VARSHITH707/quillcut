@@ -138,6 +138,45 @@ def test_every_reel_has_a_truthful_hook_and_real_editing(made):
         assert (info["width"], info["height"]) == (1080, 1920)
 
 
+# --- the brief's look: beat cuts, hazy grade, catalog type, mixed footage ------------------------------------
+
+def test_brief_aesthetic_renders_and_still_says_every_word(interview, tmp_path_factory):
+    from quillcut import beats
+    from quillcut.formats import load_style
+    d = tmp_path_factory.mktemp("look")
+    song, cartoon, ad = d / "song.wav", d / "cartoon.mp4", d / "ad.png"
+    # a kick every 0.625 s (96 BPM) over a low pad
+    media.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i",
+               "aevalsrc='0.8*sin(2*PI*(55+90*exp(-mod(t,0.625)*40))*t)*exp(-mod(t,0.625)*14)"
+               "+0.05*sin(2*PI*110*t)':s=44100:d=200", str(song)])
+    media.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "smptebars=size=640x480:rate=30", "-t", "20",
+               "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", str(cartoon)])
+    media.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "mandelbrot=size=800x1000", "-frames:v", "1",
+               str(ad)])
+    music = conversation_job.music_with_beats(song, "test tone")
+    assert abs(music["beats"]["bpm"] - 96) < 2
+    mix = conversation_job.mix_sources([ad, cartoon])
+    assert [m[1].still for m in mix] == [True, False]
+    res = conversation_job.run(
+        interview, rights="own_footage", targets=[60.0], fast=True, use_llm=False, verify=True,
+        publish_dir=d / "out", caption_style="catalog",
+        options=reelplan.PlanOptions(intensity="clean", grade="hazy", beat_cuts=True, music=music, mix=mix,
+                                     mix_amount="medium", accent=None))
+    reel = next(r for r in res["results"] if r.get("final"))
+    by_name = {v["name"]: v for v in reel["validation"]}
+    for check in ("speech_matches_plan", "ends_on_finished_sentence", "starts_on_planned_words",
+                  "duration_matches_plan"):
+        assert by_name[check]["status"] == "PASS", by_name
+    assert reel["qc"] == "PASS"
+    notes = " ".join(reel.get("notes", []))
+    assert "Cut on the beat" in notes and "Mixed footage" in notes
+    assert load_style("gaming", "catalog")["hook"]["font"]["family"] == "Bodoni MT"
+    info = media.video_info(Path(reel["final"]))
+    assert beats.parse_fps(info["fps"]) > 0
+    mbps = Path(reel["final"]).stat().st_size * 8 / info["duration"] / 1e6
+    assert mbps < 14, f"grain made the file {mbps:.0f} Mbps"           # capped, not 25-100 Mbps
+
+
 # --- optional rules, enforced on real speech -------------------------------------------------------------------
 
 def _run_with_rules(interview, tmp_path_factory, text: str, targets=(45.0,)):

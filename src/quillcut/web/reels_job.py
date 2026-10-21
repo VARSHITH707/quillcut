@@ -5,7 +5,7 @@ import json
 import re
 from pathlib import Path
 
-from .. import conversation_job, reelplan
+from .. import conversation_job, looks, reelplan
 from .. import rules as rules_mod
 from ..config import load_config, load_yaml
 from ..paths import CLIPPING
@@ -15,7 +15,9 @@ CONTENT_STYLES = ("auto", "educational", "storytelling", "motivational", "podcas
                   "business")
 DURATION_PRESETS = [30, 35, 45, 60, 75, 90]
 MIN_TARGET, MAX_TARGET, MAX_REELS = 15, 180, 20
+MAX_MIX = 12
 HEX = re.compile(r"^[0-9A-Fa-f]{6}$")
+UPLOAD_ID = re.compile(r"^[0-9a-f]{12}$")
 
 
 class OptionError(ValueError):
@@ -96,12 +98,27 @@ def validate(body: dict) -> dict:
     text = (text or "").strip()
     if len(text) > rules_mod.MAX_RULE_CHARS:
         raise OptionError(f"Rules can be at most {rules_mod.MAX_RULE_CHARS} characters.")
+    grade = body.get("grade") or "none"
+    if grade not in looks.GRADES:
+        raise OptionError("The look must be one of: " + ", ".join(sorted(looks.GRADES)) + ".")
+    mix_amount = body.get("mix_amount", "light")
+    if mix_amount not in reelplan.MIX_SHARE:
+        raise OptionError("Mixed footage amount must be light or medium.")
+    music_upload = body.get("music_upload")
+    if music_upload is not None and not (isinstance(music_upload, str) and UPLOAD_ID.match(music_upload)):
+        raise OptionError("Upload the music track again.")
+    mix_uploads = body.get("mix_uploads") or []
+    if not isinstance(mix_uploads, list) or len(mix_uploads) > MAX_MIX or \
+            not all(isinstance(m, str) and UPLOAD_ID.match(m) for m in mix_uploads):
+        raise OptionError(f"Add up to {MAX_MIX} mixed-footage files, then try again.")
     out = {"targets": targets, "intensity": intensity, "aspect": aspect, "include_question": include_question,
            "strict": bool(body.get("strict", False)), "content_style": style, "accent": accent.upper(),
            "cta": cta, "caption_y": caption_y, "music": music, "reframe": bool(body.get("reframe", True)),
            "exclude": exclude, "prefer": prefer, "logo_upload": body.get("logo_upload"), "hook_style": None,
-           "rules": text}
+           "rules": text, "grade": grade, "preset": body.get("preset"), "beat_cuts": bool(body.get("beat_cuts", False)),
+           "music_upload": music_upload, "mix_uploads": list(dict.fromkeys(mix_uploads)), "mix_amount": mix_amount}
     parsed = rules_mod.parse(text)
+    out["music_rule"] = parsed.music
     out["rule_notes"] = rules_mod.apply_to_options(parsed, out)       # rules win over the page, and say so
     out["rules_report"] = parsed.report()
     return out
@@ -115,18 +132,49 @@ def run_analysis(job: dict, update) -> None:
     update(status="done", stage="finished", analysis=result)
 
 
-def run_reels(job: dict, update, publish_dir: Path, logo_path: Path | None) -> None:
+def _music(opts: dict, music_path: Path | None, extra: list[str]) -> dict | None:
+    """The bed for these reels: the user's own track first, then an installed one. Rules saying "no music"
+    win over an upload."""
+    if music_path is not None and opts.get("music_rule") == "none":
+        extra.append("The rules say no music, so the uploaded track was left out.")
+        music_path = None
+    if music_path is not None:
+        try:
+            return conversation_job.music_with_beats(music_path, "supplied by the user")
+        except Exception as exc:  # noqa: BLE001 - a bad track must not stop the reels
+            extra.append(f"The music track could not be read ({exc}); the reels have no music.")
+            return None
+    if opts["music"] != "subtle":
+        if opts.get("beat_cuts"):
+            extra.append("Cut on the beat needs a music track; upload one to use it.")
+        return None
+    tracks = music_tracks()
+    if not tracks:
+        return {"file": ""}                     # reelplan says no track is installed
+    if opts.get("beat_cuts"):
+        return conversation_job.music_with_beats(Path(tracks[0]["file"]), tracks[0]["licence"])
+    return {"file": tracks[0]["file"], "licence": tracks[0]["licence"], "level_db": -16.0}
+
+
+def run_reels(job: dict, update, publish_dir: Path, logo_path: Path | None, music_path: Path | None = None,
+              mix_paths: list[Path] | None = None) -> None:
     opts = job["options"]
     cfg = load_config("gaming")
-    overrides = {"colors": opts["colors"], "speech": {"size": opts["caption_size"]},
-                 "hook": {"size": opts["hook_size"]}}
-    tracks = music_tracks() if opts["music"] == "subtle" else []
+    from_rules = opts.get("style_from_rules")        # the page's colours belong to the page's preset
+    overrides = {} if from_rules else {"colors": opts["colors"], "speech": {"size": opts["caption_size"]},
+                                       "hook": {"size": opts["hook_size"]}}
+    extra: list[str] = []
+    update(stage="preparing")
+    music = _music(opts, music_path, extra)
+    mix = conversation_job.mix_sources(mix_paths or [])
+    if mix_paths and len(mix) < len(mix_paths):
+        extra.append(f"{len(mix_paths) - len(mix)} mixed-footage file(s) could not be read and were left out.")
     plan_opts = reelplan.PlanOptions(
         intensity=opts["intensity"], aspect=opts["aspect"], reframe=opts["reframe"], cta=opts["cta"],
-        accent=opts["accent"], logo=str(logo_path) if logo_path else None, caption_y=opts.get("caption_y"),
-        hook_style=opts.get("hook_style"),
-        music={"file": tracks[0]["file"], "licence": tracks[0]["licence"], "level_db": -16.0} if tracks
-        else ({"file": ""} if opts["music"] == "subtle" else None))
+        accent=None if from_rules else opts["accent"], logo=str(logo_path) if logo_path else None,
+        caption_y=opts.get("caption_y"), hook_style=opts.get("hook_style"), music=music,
+        grade=None if opts.get("grade", "none") == "none" else opts["grade"],
+        beat_cuts=bool(opts.get("beat_cuts")), mix=mix or None, mix_amount=opts.get("mix_amount", "light"))
 
     def progress(stage, done=0, total=0):
         update(stage=stage, done=done, total=total)
@@ -167,7 +215,7 @@ def run_reels(job: dict, update, publish_dir: Path, logo_path: Path | None) -> N
         note = (f"Made {len(good)} of {len(clips)} reels. The video has {result['capacity']} distinct complete "
                 f"moment{'s' if result['capacity'] != 1 else ''}; the rest would have needed filler.")
     report = opts.get("rules_report") or {}
-    messages = sorted(set(notes)) + list(opts.get("rule_notes") or [])
+    messages = sorted(set(notes)) + extra + list(opts.get("rule_notes") or [])
     messages += [f"Not enforced automatically: {line}" for line in report.get("advisory", [])]
     update(status="done", stage="finished", clips=clips, note=note, capacity=result["capacity"],
            speakers=result["speakers"], messages=messages, rules_report=report,

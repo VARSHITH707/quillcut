@@ -192,12 +192,44 @@
             </div>
           </div>
           <fieldset class="field">
+            <legend>Look</legend>
+            <div class="seg" id="grade">
+              <label><input type="radio" name="grade" value="none" checked><span>As shot</span></label>
+              <label><input type="radio" name="grade" value="hazy"><span>Hazy</span></label>
+              <label><input type="radio" name="grade" value="film"><span>Film</span></label>
+              <label><input type="radio" name="grade" value="vhs"><span>VHS</span></label>
+            </div>
+          </fieldset>
+          <fieldset class="field">
             <legend>Background music</legend>
             <div class="seg" id="music">
               <label><input type="radio" name="music" value="none" checked><span>None</span></label>
               <label><input type="radio" name="music" value="subtle"><span>Subtle, under speech</span></label>
             </div>
+            <div class="field">
+              <label for="music-file">or use your own track (mp3, wav, m4a, flac, ogg)</label>
+              <input type="file" id="music-file" accept=".mp3,.wav,.m4a,.aac,.flac,.ogg,audio/*">
+              <p class="hint" id="music-file-state"></p>
+            </div>
+            <label class="check">
+              <input type="checkbox" id="beat-cuts">
+              <span>Cut on the beat (cuts only land between words)</span>
+            </label>
             <p class="hint" id="music-hint"></p>
+          </fieldset>
+          <fieldset class="field">
+            <legend>Mixed footage (optional)</legend>
+            <p class="hint">Old ads, cartoons, game clips, textures or photos. They show for a beat or two while the speaker keeps talking, never over the hook.</p>
+            <input type="file" id="mix-files" multiple accept="video/*,image/png,image/jpeg,image/webp" aria-label="Mixed footage files">
+            <div class="link-in__row">
+              <input type="url" id="mix-link" placeholder="or paste a link: Drive folder, YouTube, direct file" aria-label="Mixed footage link">
+              <button type="button" class="mini" id="mix-link-go">Add</button>
+            </div>
+            <ul class="mix-list" id="mix-list"></ul>
+            <div class="seg" id="mix-amount">
+              <label><input type="radio" name="mix_amount" value="light" checked><span>Light · up to 20%</span></label>
+              <label><input type="radio" name="mix_amount" value="medium"><span>Medium · up to 33%</span></label>
+            </div>
           </fieldset>
           <fieldset class="field">
             <legend>Quality</legend>

@@ -14,6 +14,7 @@ from . import media
 from .captions import build_ass
 from .types import EditPlan, Segment, SourceRef
 
+from .looks import grade_graph
 from .reframe import crop_x_pixels
 
 OUT_W, OUT_H = 1080, 1920      # default canvas; a plan's OutputSpec overrides it per render
@@ -67,7 +68,11 @@ def segment_command(seg: Segment, plan: EditPlan, out: Path) -> list[str]:
     vsrc = plan.sources[seg.video_source] if seg.video_source else src
     out_w, out_h = plan.output.width, plan.output.height
     v_in = seg.video_in if seg.video_source else seg.src_in
-    cmd = ["ffmpeg", "-y", "-v", "error", "-ss", f"{v_in:.3f}", "-t", f"{span:.3f}", "-i", vsrc.path]
+    if vsrc.still:                     # a photo cutaway: loop the image for exactly this shot's length
+        cmd = ["ffmpeg", "-y", "-v", "error", "-loop", "1", "-framerate", plan.output.fps, "-t", f"{span:.3f}",
+               "-i", vsrc.path]
+    else:
+        cmd = ["ffmpeg", "-y", "-v", "error", "-ss", f"{v_in:.3f}", "-t", f"{span:.3f}", "-i", vsrc.path]
     inputs = 1
     if seg.layout == "split":
         second = plan.sources[seg.second_source]
@@ -113,7 +118,8 @@ def segment_command(seg: Segment, plan: EditPlan, out: Path) -> list[str]:
     return cmd
 
 
-LIMIT_DBFS = -2.5        # sample-peak ceiling; leaves room for inter-sample peaks under -1 dBTP
+MAX_VIDEO_RATE, MAX_VIDEO_BUFFER = "12M", "24M"   # well above a clean 1080x1920 reel (4-8 Mbps at crf 18)
+LIMIT_DBFS = -2.5       # sample-peak ceiling; leaves room for inter-sample peaks under -1 dBTP
 LOUDNESS_STEPS = 5
 LOUDNESS_TOLERANCE = 0.3
 
@@ -232,6 +238,9 @@ def render_plan(plan: EditPlan, out_path: Path, work: Path, *, preset: str = "sl
     concat = ["-f", "concat", "-safe", "0", "-i", "list.txt"]
     dur = plan.duration
     vf = []
+    grade = grade_graph(plan.grade, plan.output.width, plan.output.height)
+    if grade:                          # the grade covers footage and cutaways, never the captions drawn after it
+        vf.append(grade)
     if plan.look:
         vf.append("eq=" + ":".join(f"{k}={v}" for k, v in sorted(plan.look.items())))
     vf.append("subtitles=captions.ass")
@@ -246,7 +255,8 @@ def render_plan(plan: EditPlan, out_path: Path, work: Path, *, preset: str = "sl
     master = _master_audio(mixed, work, plan.audio.target_lufs, plan.audio.true_peak_max, fade,
                            denoise=plan.audio.denoise)
     tmp_out = work / "final.mp4"
-    logo_input, video_filter, video_map = [], ["-vf", ",".join(vf)], "0:v"
+    # always a filter graph: a grade may split and blend internally, which a simple -vf chain cannot carry
+    logo_input, video_filter, video_map = [], ["-filter_complex", f"[0:v]{','.join(vf)}[vout]"], "[vout]"
     if plan.logo:                    # persistent brand logo, composited over captions for the whole video
         shutil.copy(plan.logo["file"], work / "logo.png")
         w = int(round(plan.output.width * plan.logo.get("width", 0.30) / 2) * 2)
@@ -254,10 +264,11 @@ def render_plan(plan: EditPlan, out_path: Path, work: Path, *, preset: str = "sl
         logo_input = ["-loop", "1", "-i", "logo.png"]
         video_filter = ["-filter_complex", f"[0:v]{','.join(vf)}[base];[2:v]scale={w}:-2,format=rgba[logo];"
                                            f"[base][logo]overlay=x=(W-w)/2:y={top}:format=auto[vout]"]
-        video_map = "[vout]"
     media.run(["ffmpeg", "-y", "-v", "error", *concat, "-i", master.name, *logo_input,
                "-map", video_map, "-map", "1:a", *video_filter,
                "-c:v", "libx264", "-preset", preset, "-crf", str(crf), "-threads", str(threads),
+               # moving grain would otherwise cost 25-100 Mbps; platforms re-encode to ~4 Mbps anyway
+               "-maxrate", MAX_VIDEO_RATE, "-bufsize", MAX_VIDEO_BUFFER,
                "-profile:v", "high", "-level", "4.2", "-pix_fmt", "yuv420p",
                "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709",
                "-r", plan.output.fps, "-c:a", "copy",

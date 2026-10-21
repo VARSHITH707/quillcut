@@ -9,7 +9,9 @@
   const state = {
     upload: null,          // {upload_id, name, size, duration, width, height}
     logoId: null,
-    analysis: null,        // result of the conversation analysis, or null while unknown
+    musicId: null,
+    mix: [],               // mixed footage: [{upload_id, name, photo}]
+    analysis: null,       // result of the conversation analysis, or null while unknown
     analysisJob: null,
     presets: [],
     formats: [],
@@ -74,6 +76,9 @@
       include_question: $("include-question").value,
       strict: $("strict").checked,
       music: selected("music") || "none",
+      grade: selected("grade") || "none",
+      beat_cuts: $("beat-cuts").checked,
+      mix_amount: selected("mix_amount") || "light",
       cta: $("cta").value.trim() || null,
       quality: selected("quality") || "draft",
       rights: $("rights").value,
@@ -119,6 +124,7 @@
     $("c-base").value = "#" + (c.base || "FFFFFF");
     $("c-active").value = "#" + (c.active || "FFD400");
     $("c-stroke").value = "#" + (c.stroke || "000000");
+    if (c.accent) $("c-accent").value = "#" + c.accent;
     $("size").value = p.speech_size;
     paintPreview();
   }
@@ -224,10 +230,11 @@
     set("content-style", saved.content_style);
     set("include-question", saved.include_question);
     set("rules", saved.rules);
-    ["intensity", "aspect", "quality", "music"].forEach((name) => {
+    ["intensity", "aspect", "quality", "music", "grade", "mix_amount"].forEach((name) => {
       const input = saved[name] && document.querySelector(`input[name="${name}"][value="${saved[name]}"]`);
       if (input) input.checked = true;
     });
+    $("beat-cuts").checked = Boolean(saved.beat_cuts);
     paintPreview();
   }
 
@@ -339,7 +346,10 @@
         if (job.status === "failed") { note.textContent = ""; return showUploadError(job.error || "The download failed."); }
         const videos = job.uploads || [];
         const extra = [];
-        if ((job.photos || []).length) extra.push(`${job.photos.length} photo(s) received. Use one as your logo in step 4; mixing photos into the edit isn't built yet.`);
+        if ((job.photos || []).length) {
+          addMix(job.photos.map((p) => ({ ...p, photo: true })));
+          extra.push(`${job.photos.length} photo(s) received and added to Mixed footage in step 4.`);
+        }
         if ((job.problems || []).length) extra.push(`Skipped: ${job.problems.join("; ")}`);
         note.textContent = extra.join(" ");
         if (videos.length === 1) return useUpload(videos[0]);
@@ -393,6 +403,74 @@
       state.logoId = null;
       note.textContent = err.message;
     }
+  }
+
+  async function uploadFile(kind, file) {
+    const res = await fetch(`/api/upload?kind=${kind}&name=` + encodeURIComponent(file.name), { method: "POST", body: file });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `Upload failed (${res.status})`);
+    return data;
+  }
+
+  async function uploadMusic(file) {
+    const note = $("music-file-state");
+    state.musicId = null;
+    if (!file) { note.textContent = ""; return; }
+    note.textContent = "Uploading and finding the beat…";
+    try {
+      const data = await uploadFile("music", file);
+      state.musicId = data.upload_id;
+      note.textContent = `${file.name}: ${data.bpm} BPM, ${fmtTime(data.duration)}. Plays under the speech.`;
+    } catch (err) {
+      note.textContent = err.message;
+    }
+  }
+
+  /* ---------- mixed footage ---------- */
+  function addMix(items) {
+    const known = new Set(state.mix.map((m) => m.upload_id));
+    state.mix = [...state.mix, ...items.filter((m) => !known.has(m.upload_id))].slice(0, 12);
+    renderMix();
+  }
+
+  function renderMix() {
+    $("mix-list").replaceChildren(...state.mix.map((m) => {
+      const x = el("button", { type: "button", className: "mini", textContent: "Remove", "aria-label": `Remove ${m.name}` });
+      x.addEventListener("click", () => { state.mix = state.mix.filter((k) => k !== m); renderMix(); });
+      return el("li", {}, el("span", { textContent: `${m.photo ? "Photo" : "Clip"} · ${m.name}` }), x);
+    }));
+  }
+
+  async function uploadMixFiles(files) {
+    for (const file of files) {
+      try {
+        const data = await uploadFile("mix", file);
+        addMix([{ upload_id: data.upload_id, name: data.name, photo: data.photo }]);
+      } catch (err) {
+        toast(`${file.name}: ${err.message}`);
+      }
+    }
+    $("mix-files").value = "";
+  }
+
+  async function getMixFromLink() {
+    const url = $("mix-link").value.trim();
+    if (!url) return toast("Paste a link first.");
+    $("mix-link-go").disabled = true;
+    try {
+      let job = await post("/api/inputs/link", { url, role: "mix" });
+      while (job.status === "queued" || job.status === "running") {
+        await new Promise((r) => setTimeout(r, 1500));
+        job = await api(`/api/jobs/${job.id}`);
+      }
+      if (job.status === "failed") throw new Error(job.error || "The download failed.");
+      addMix([...(job.uploads || []).map((v) => ({ ...v, photo: false })), ...(job.photos || []).map((p) => ({ ...p, photo: true }))]);
+      $("mix-link").value = "";
+      if ((job.problems || []).length) toast(`Skipped: ${job.problems.join("; ")}`);
+    } catch (err) {
+      toast(err.message);
+    }
+    $("mix-link-go").disabled = false;
   }
 
   /* ---------- rules (optional) ---------- */
@@ -556,6 +634,8 @@
     $("job-error").hidden = true;
     const body = { ...currentOptions(), ...overrides, kind: "reels", upload_id: state.upload.upload_id };
     if (state.logoId) body.logo_upload = state.logoId;
+    if (state.musicId) body.music_upload = state.musicId;
+    if (state.mix.length) body.mix_uploads = state.mix.map((m) => m.upload_id);
     $("go").disabled = true;
     try {
       const job = await post("/api/jobs", body);
@@ -762,7 +842,7 @@
     else if (o.running) { dot.dataset.state = "warn"; $("status-text").textContent = `Ready · install ${o.model} for AI captions`; }
     else { dot.dataset.state = "warn"; $("status-text").textContent = "Ready · template captions (Ollama is off)"; }
     $("music-hint").textContent = status.reels && status.reels.music_available ? ""
-      : "No music track is installed, so reels render without music. Run tools/make_music.py to generate royalty-free beds.";
+      : "No built-in track is installed: upload your own above, or run tools/make_music.py to generate royalty-free beds.";
 
     $("rights").replaceChildren(...Object.entries(status.rights).map(([k, v]) => el("option", { value: k, textContent: v })));
     const saved = load();
@@ -782,12 +862,17 @@
     $("file-cancel").addEventListener("click", () => state.xhr && state.xhr.abort());
     $("file-remove").addEventListener("click", resetUpload);
     $("logo").addEventListener("change", (e) => uploadLogo(e.target.files[0]));
-    ["size", "caption-y", "c-base", "c-active", "c-stroke", "c-accent", "content-style", "include-question", "cta"]
+    $("music-file").addEventListener("change", (e) => uploadMusic(e.target.files[0]));
+    $("beat-cuts").addEventListener("change", paintPreview);
+    $("mix-files").addEventListener("change", (e) => uploadMixFiles([...e.target.files]));
+    $("mix-link-go").addEventListener("click", getMixFromLink);
+    $("mix-link").addEventListener("keydown", (e) => { if (e.key === "Enter") getMixFromLink(); });
+    ["size","caption-y", "c-base", "c-active", "c-stroke", "c-accent", "content-style", "include-question", "cta"]
       .forEach((id) => $(id).addEventListener("input", paintPreview));
     $("strict").addEventListener("change", paintPreview);
     document.addEventListener("change", (e) => {
       const n = e.target.name;
-      if (["quality", "intensity", "aspect", "music"].includes(n)) paintPreview();
+      if (["quality", "intensity", "aspect", "music", "grade", "mix_amount"].includes(n)) paintPreview();
       if (n === "count" && e.target.value !== "custom") setCount(Number(e.target.value));
       if (n === "count" && e.target.value === "custom") {
         const box = $("count-custom");

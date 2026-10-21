@@ -42,19 +42,29 @@ JOBS = WEB_ROOT / "jobs"
 
 VIDEO_EXT = {".mp4", ".mov", ".mkv", ".webm", ".m4v", ".avi"}
 IMAGE_EXT = {".png", ".jpg", ".jpeg", ".webp"}
+AUDIO_EXT = {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg"}
+MAX_MUSIC = 200 * 1024 ** 2
 RIGHTS = {"own_footage": "I own this footage", "client_owned": "My client owns it and I have permission",
           "client_licensed": "It is licensed to me for this use", "cc_verified": "It is Creative Commons and I verified the licence"}
 MAX_UPLOAD = int(float(os.environ.get("QUILLCUT_MAX_UPLOAD_GB", "10")) * 1024 ** 3)
 ID_RE = re.compile(r"^[0-9a-f]{12}$")
 HEX_RE = re.compile(r"^[0-9A-Fa-f]{6}$")
 FORMAT = "gaming"  # the native automatic format; delegated formats are listed but disabled
-PRESET_NAMES = {"gaming_bold": "Bold gaming", "gaming_headline": "Headline", "brand_clean": "Clean brand"}
+PRESET_NAMES = {"gaming_bold": "Bold gaming", "gaming_headline": "Headline", "brand_clean": "Clean brand",
+                "catalog": "Catalog (serif)"}
 
 
 class ApiError(Exception):
     def __init__(self, status: int, message: str):
         super().__init__(message)
         self.status, self.message = status, message
+
+
+def upload_file(upload_id, exts: set[str]) -> Path | None:
+    """The file inside an upload folder, if the id is well formed and the file has one of `exts`."""
+    if not isinstance(upload_id, str) or not ID_RE.match(upload_id) or not (UPLOADS / upload_id).is_dir():
+        return None
+    return next((p for p in sorted((UPLOADS / upload_id).iterdir()) if p.suffix.lower() in exts), None)
 
 
 def safe_name(name: str) -> str:
@@ -176,10 +186,11 @@ def run_job(job_id: str) -> None:
         if kind == "analyze":
             reels_job.run_analysis(job, update)
         else:
-            logo_id = job["options"].get("logo_upload")
-            logo = next(iter((UPLOADS / logo_id).iterdir()), None) if logo_id and ID_RE.match(logo_id) \
-                and (UPLOADS / logo_id).is_dir() else None
-            reels_job.run_reels(job, update, JOBS / job_id / "reels", logo)
+            o = job["options"]
+            logo = upload_file(o.get("logo_upload"), IMAGE_EXT)
+            music = upload_file(o.get("music_upload"), AUDIO_EXT)
+            mix = [p for m in o.get("mix_uploads") or [] if (p := upload_file(m, VIDEO_EXT | IMAGE_EXT))]
+            reels_job.run_reels(job, update, JOBS / job_id / "reels", logo, music, mix)
         s.update(job_id, finished=time.time())
     except pipeline_jobs.SourceRejected as exc:
         s.update(job_id, status="failed", error=str(exc), finished=time.time())
@@ -460,8 +471,12 @@ class Handler(BaseHTTPRequestHandler):
         kind = (query.get("kind") or [""])[0]
         is_logo = kind == "logo"
         is_rules = kind == "rules"
-        allowed = IMAGE_EXT if is_logo else inputs.DOC_EXT if is_rules else VIDEO_EXT
-        if Path(name).suffix.lower() not in allowed:
+        suffix = Path(name).suffix.lower()
+        # mixed footage is a cutaway: a video of any length or a photo
+        is_photo = kind == "mix" and suffix in IMAGE_EXT
+        allowed = (IMAGE_EXT if is_logo else inputs.DOC_EXT if is_rules else AUDIO_EXT if kind == "music"
+                   else VIDEO_EXT | IMAGE_EXT if kind == "mix" else VIDEO_EXT)
+        if suffix not in allowed:
             raise ApiError(415, f"Use one of: {', '.join(sorted(allowed))}")
         try:
             length = int(self.headers.get("Content-Length") or "")
@@ -469,10 +484,13 @@ class Handler(BaseHTTPRequestHandler):
             raise ApiError(411, "The upload size is missing.") from None
         if length <= 0:
             raise ApiError(400, "That file is empty.")
-        limit = 10 * 1024 ** 2 if is_logo else inputs.MAX_DOC_BYTES if is_rules else MAX_UPLOAD
+        limit = (10 * 1024 ** 2 if is_logo else inputs.MAX_DOC_BYTES if is_rules else MAX_MUSIC if kind == "music"
+                 else 20 * 1024 ** 2 if is_photo else MAX_UPLOAD)
         if length > limit:
             raise ApiError(413, "A logo must be smaller than 10 MB." if is_logo else
                            "A rules document must be smaller than 20 MB." if is_rules else
+                           "A music track must be smaller than 200 MB." if kind == "music" else
+                           "A photo must be smaller than 20 MB." if is_photo else
                            f"That file is larger than {limit / 1024 ** 3:.0f} GB.")
         upload_id = uuid.uuid4().hex[:12]
         folder = UPLOADS / upload_id
@@ -497,19 +515,35 @@ class Handler(BaseHTTPRequestHandler):
                 if not text.strip():
                     raise ApiError(422, "That document has no text.")
                 return self._json({"kind": "rules", "name": name, "text": text, "chars": len(text)}, 201)
-            if is_logo:
+            if is_logo or is_photo:
                 from PIL import Image
                 try:
                     with Image.open(target) as im:
                         im.verify()
                 except Exception:  # noqa: BLE001
                     raise ApiError(422, "That file doesn't look like an image we can read.") from None
-                return self._json({"upload_id": upload_id, "name": name, "size": length, "kind": "logo"}, 201)
+                return self._json({"upload_id": upload_id, "name": name, "size": length,
+                                   "kind": "logo" if is_logo else "mix", "photo": is_photo}, 201)
+            if kind == "music":
+                from ..conversation_job import music_with_beats
+                try:
+                    bed = music_with_beats(target, "supplied by the user")
+                except Exception:  # noqa: BLE001
+                    raise ApiError(422, "That file doesn't look like music we can read, or it is under "
+                                        "two seconds.") from None
+                return self._json({"upload_id": upload_id, "name": name, "size": length, "kind": "music",
+                                   "bpm": round(bed["beats"]["bpm"]), "duration": round(bed["beats"]["duration"], 1)},
+                                  201)
             from .. import media
             try:
                 info = media.video_info(target)
             except Exception:  # noqa: BLE001
                 raise ApiError(422, "That file doesn't look like a video we can read.") from None
+            if kind == "mix":
+                if info["duration"] < 1:
+                    raise ApiError(422, "That clip is under a second; use a longer one.")
+                return self._json({"upload_id": upload_id, "name": name, "size": length, "kind": "mix",
+                                   "photo": False, "duration": round(info["duration"], 1)}, 201)
             if info["duration"] < 20:
                 raise ApiError(422, f"That video is only {info['duration']:.0f} seconds. Use one of at least 20 seconds.")
         except ApiError:
@@ -524,8 +558,8 @@ class Handler(BaseHTTPRequestHandler):
         """A pasted link. role "rules" returns the text straight away; role "video" starts a download job."""
         body = self._read_json()
         url, role = str(body.get("url") or "").strip(), body.get("role")
-        if role not in ("video", "rules"):
-            raise ApiError(400, "Say whether the link is for the video or the rules.")
+        if role not in ("video", "rules", "mix"):
+            raise ApiError(400, "Say whether the link is for the video, the rules or mixed footage.")
         if not url or len(url) > 2000:
             raise ApiError(400, "Paste a link first.")
         if role == "rules":
@@ -544,7 +578,7 @@ class Handler(BaseHTTPRequestHandler):
         except inputs.InputError as exc:
             raise ApiError(422, str(exc)) from None
         job_id = uuid.uuid4().hex[:12]
-        job = {"id": job_id, "kind": "fetch", "url": url, "status": "queued", "stage": "queued",
+        job = {"id": job_id, "kind": "fetch", "role": role, "url": url, "status": "queued", "stage": "queued",
                "progress_text": "Starting the download", "created": time.time()}
         store().add(job)
         threading.Thread(target=run_fetch_job, args=(job_id,), daemon=True, name=f"fetch-{job_id}").start()
@@ -593,9 +627,12 @@ class Handler(BaseHTTPRequestHandler):
                 except ValueError as exc:
                     raise ApiError(400, str(exc)) from None
                 logo_id = extra.get("logo_upload")
-                if logo_id is not None and (not isinstance(logo_id, str) or not ID_RE.match(logo_id)
-                                            or not (UPLOADS / logo_id).is_dir()):
+                if logo_id is not None and upload_file(logo_id, IMAGE_EXT) is None:
                     raise ApiError(400, "Upload the logo again.")
+                if extra["music_upload"] and upload_file(extra["music_upload"], AUDIO_EXT) is None:
+                    raise ApiError(400, "Upload the music track again.")
+                if any(upload_file(m, VIDEO_EXT | IMAGE_EXT) is None for m in extra["mix_uploads"]):
+                    raise ApiError(400, "One of the mixed-footage files is gone; add it again.")
                 options = {**options, **extra, "max_clips": len(extra["targets"])}
         job_id = uuid.uuid4().hex[:12]
         job = {"id": job_id, "kind": kind, "filename": files[0].name, "source": str(files[0]), "status": "queued",
